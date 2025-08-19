@@ -1,5 +1,6 @@
 import React, { useRef, useEffect, useState } from "react";
 import QRCode from "react-qr-code";
+import { WebRTCHandler } from "./components/WebRTCHandler.jsx";
 
 function getLocalUrl() {
   const host = window.location.hostname;
@@ -11,172 +12,175 @@ export default function App() {
   const videoRef = useRef(null);
   const [qrUrl, setQrUrl] = useState("");
   const [error, setError] = useState("");
-  const [isStreaming, setIsStreaming] = useState(false);
+  const [connected, setConnected] = useState(false);
   const [isMobile, setIsMobile] = useState(false);
-  const wsRef = useRef(null);
+  const [messages, setMessages] = useState([]);
+  const [inputMessage, setInputMessage] = useState("");
+  const webrtcRef = useRef(null);
 
   useEffect(() => {
-    // Check if the device is mobile
-    const mobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
-    setIsMobile(mobile);
+    const isMobileDevice = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+    setIsMobile(isMobileDevice);
+    setQrUrl(window.location.href);
 
-    if (mobile) {
-      // This is the mobile device - start streaming
-      startStreaming();
-    } else {
-      // This is the desktop - show QR code and set up receiver
-      setQrUrl(getLocalUrl());
-      
-      // Set up broadcast channel receiver
-      const bc = new BroadcastChannel('video-stream');
-      bc.onmessage = (event) => {
-        const img = document.getElementById('receiverImage');
-        if (img) {
-          img.src = event.data;
-          img.style.display = 'block';
+    const webrtc = new WebRTCHandler(
+      null,
+      (stream) => {
+        if (videoRef.current) {
+          videoRef.current.srcObject = stream;
         }
-      };
+      },
+      () => setConnected(true),
+      (message) => {
+        setMessages(prev => [...prev, { text: message, received: true }]);
+      }
+    );
 
-      return () => {
-        bc.close();
-      };
-    }
-  }, []);
+    webrtcRef.current = webrtc;
 
-  const startStreaming = async () => {
-    try {
-      const constraints = {
-        video: {
-          facingMode: "environment", // Use back camera
+    if (isMobileDevice) {
+      // Mobile device: get camera and start as initiator
+      navigator.mediaDevices.getUserMedia({ 
+        video: { 
+          facingMode: 'environment',
           width: { ideal: 1280 },
           height: { ideal: 720 }
         }
-      };
+      })
+      .then(stream => {
+        webrtc.stream = stream;
+        if (videoRef.current) {
+          videoRef.current.srcObject = stream;
+        }
+        const wsUrl = `ws://${window.location.hostname}:8080`;
+        webrtc.connect(wsUrl);
+      })
+      .catch(err => {
+        console.error('Camera error:', err);
+        setError(err.message);
+      });
+    } else {
+      // Desktop: just connect as receiver
+      const wsUrl = `ws://${window.location.hostname}:8080`;
+      webrtc.connect(wsUrl);
+    }
 
-      const stream = await navigator.mediaDevices.getUserMedia(constraints);
-      
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream;
-        await videoRef.current.play();
-        
-        // Set up canvas for video capture
-        const canvas = document.createElement('canvas');
-        const context = canvas.getContext('2d');
-        canvas.width = 640;  // Reduced size for better performance
-        canvas.height = 480;
-
-        // Send video frames periodically
-        setInterval(() => {
-          if (videoRef.current && isStreaming) {
-            context.drawImage(videoRef.current, 0, 0, canvas.width, canvas.height);
-            try {
-              const frameData = canvas.toDataURL('image/jpeg', 0.5); // Reduced quality for performance
-              // Use BroadcastChannel to send frame to all connected tabs
-              const bc = new BroadcastChannel('video-stream');
-              bc.postMessage(frameData);
-            } catch (e) {
-              console.error('Frame sending error:', e);
-            }
-          }
-        }, 100); // 10 fps for better performance
-
-        setIsStreaming(true);
+    return () => {
+      if (webrtcRef.current) {
+        webrtcRef.current.disconnect();
       }
-    } catch (err) {
-      console.error("Camera error:", err);
-      setError(`Camera access error: ${err.name} - ${err.message}`);
+    };
+  }, []);
+
+  function getLocalUrl() {
+    const host = window.location.hostname;
+    const port = window.location.port;
+    return `http://${host}:${port}`;
+  }
+
+  const sendMessage = () => {
+    if (inputMessage.trim() && webrtcRef.current) {
+      // Attempt to send over data channel
+      try {
+        const ok = webrtcRef.current.sendMessage ? webrtcRef.current.sendMessage(inputMessage) : false;
+        if (!ok) {
+          console.log('Data channel not available or send failed; using WS fallback');
+        }
+      } catch (e) {
+        console.warn('Data channel send threw:', e);
+      }
+
+      // Always send via signaling WebSocket as a reliable fallback
+      try {
+        const wsok = webrtcRef.current.sendChat ? webrtcRef.current.sendChat(inputMessage) : false;
+        if (!wsok) console.warn('WebSocket chat send failed or not available');
+      } catch (e) {
+        console.error('sendChat threw:', e);
+      }
+
+      // Update local UI immediately
+      setMessages(prev => [...prev, { text: inputMessage, received: false }]);
+      setInputMessage("");
     }
   };
 
   return (
     <div style={{ textAlign: "center" }}>
-      <h2>Heimdall: Phone Camera Stream</h2>
-      <div style={{ margin: "20px" }}>
-        {isMobile ? (
-          // Mobile view - show camera stream
+      <h2>Heimdall: Phone Camera Stream (WebRTC)</h2>
+      {isMobile ? (
+        <video ref={videoRef} autoPlay playsInline muted style={{ width: 320, height: 240 }} />
+      ) : (
+        <>
           <div>
-            <h3>📱 Phone Camera View</h3>
-            <video
-              ref={videoRef}
-              autoPlay
-              playsInline
-              muted
-              style={{ 
-                width: "100%", 
-                maxWidth: "720px", 
-                border: "2px solid #2196f3",
-                borderRadius: "8px",
-                display: error ? "none" : "block",
-                margin: "0 auto"
-              }}
-            />
-            {isStreaming ? (
-              <div style={{ margin: "20px", color: "green" }}>
-                ✅ Camera is streaming
-              </div>
-            ) : (
-              <div style={{ margin: "20px", color: "orange" }}>
-                ⏳ Starting camera...
-              </div>
-            )}
+            <p>Scan this QR code with your phone to join:</p>
+            <QRCode value={qrUrl} size={180} />
+            <p>Or open: <b>{qrUrl}</b> on your phone</p>
           </div>
-        ) : (
-          // Desktop view - show receiving video and QR code
-          <div>
-            <h3>💻 Desktop View</h3>
-            <img
-              id="receiverImage"
-              style={{ 
-                width: "100%", 
-                maxWidth: "720px", 
-                border: "2px solid #2196f3",
-                borderRadius: "8px",
-                margin: "20px auto",
-                display: "block"
-              }}
-              alt="Waiting for phone camera..."
-              onLoad={(e) => {
-                // When an image loads successfully, show it
-                e.target.style.display = "block";
-              }}
-            />
-            <div style={{ margin: "20px" }}>
-              <p>To view your phone's camera on this screen:</p>
-              <ol style={{ textAlign: "left", maxWidth: "400px", margin: "20px auto" }}>
-                <li>Open this URL on your phone:</li>
-                <li><b style={{ color: "#2196f3" }}>{qrUrl}</b></li>
-                <li>Or scan this QR code:</li>
-              </ol>
-              <QRCode value={qrUrl} size={180} />
-              <p style={{ marginTop: "20px", fontSize: "0.9em", color: "#666" }}>
-                Make sure to allow camera access when prompted on your phone
-              </p>
-            </div>
-          </div>
-        )}
-        
-        {error && (
-          <div style={{ 
-            color: "red", 
-            margin: "20px",
+          <video ref={videoRef} autoPlay playsInline style={{ width: 320, height: 240 }} />
+          {connected ? <div style={{ color: "green" }}>✅ Connected!</div> : <div>Waiting for connection...</div>}
+        </>
+      )}
+      {error && <div style={{ color: "red" }}>{error}</div>}
+      
+      {connected && (
+        <div style={{ marginTop: "20px", maxWidth: "600px", margin: "20px auto" }}>
+          <div style={{
+            border: "1px solid #ccc",
+            borderRadius: "5px",
             padding: "10px",
-            border: "1px solid red",
-            borderRadius: "4px",
-            backgroundColor: "#fff8f8"
+            height: "200px",
+            overflowY: "auto",
+            marginBottom: "10px",
+            backgroundColor: "#f5f5f5"
           }}>
-            <p><strong>Error:</strong> {error}</p>
-            <p style={{ marginTop: "10px", fontSize: "0.9em" }}>
-              Troubleshooting tips:
-              <ul style={{ textAlign: "left", marginTop: "5px" }}>
-                <li>Make sure you're using a modern browser (Chrome, Safari)</li>
-                <li>Allow camera permissions when prompted</li>
-                <li>If using Chrome, enable "Insecure origins treated as secure" in chrome://flags</li>
-                <li>Try refreshing the page</li>
-              </ul>
-            </p>
+            {messages.map((msg, index) => (
+              <div
+                key={index}
+                style={{
+                  textAlign: msg.received ? "left" : "right",
+                  margin: "5px",
+                  padding: "8px",
+                  backgroundColor: msg.received ? "#e3f2fd" : "#e8f5e9",
+                  borderRadius: "10px",
+                  display: "inline-block",
+                  maxWidth: "70%",
+                  wordWrap: "break-word"
+                }}
+              >
+                {msg.text}
+              </div>
+            ))}
           </div>
-        )}
-      </div>
+          <div style={{ display: "flex", gap: "10px" }}>
+            <input
+              type="text"
+              value={inputMessage}
+              onChange={(e) => setInputMessage(e.target.value)}
+              onKeyPress={(e) => e.key === "Enter" && sendMessage()}
+              placeholder="Type a message..."
+              style={{
+                flex: 1,
+                padding: "8px",
+                borderRadius: "5px",
+                border: "1px solid #ccc"
+              }}
+            />
+            <button
+              onClick={sendMessage}
+              style={{
+                padding: "8px 16px",
+                borderRadius: "5px",
+                border: "none",
+                backgroundColor: "#4CAF50",
+                color: "white",
+                cursor: "pointer"
+              }}
+            >
+              Send
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
