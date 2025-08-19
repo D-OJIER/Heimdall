@@ -1,0 +1,29 @@
+# Node/Vite/React
+node_modules/
+dist/
+.env
+
+# Python
+server/venv/
+__pycache__/
+*.pyc
+
+# VSCode
+.vscode/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Docker
+*.pid
+
+# Bench/metrics
+bench/metrics.json
+
+# Misc
+*.swp
+*.swo
