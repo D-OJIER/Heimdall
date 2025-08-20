@@ -22,11 +22,21 @@ const ObjectDetection = ({ videoStream, sendDetectionToPeer, remoteDetections })
           try {
             // Ensure the wasm files are served from /wasm/
             setWasmPaths('/wasm/');
+
+            // Quick network check to validate wasm files are being served
+            try {
+              const wasmTest = await fetch('/wasm/tfjs-backend-wasm.wasm', { method: 'GET' });
+              console.log('WASM file fetch status:', wasmTest.status, '/wasm/tfjs-backend-wasm.wasm');
+            } catch (netErr) {
+              console.warn('Failed to fetch wasm file at /wasm/tfjs-backend-wasm.wasm — it may not be served correctly:', netErr);
+            }
+
             await tf.setBackend('wasm');
             await tf.ready();
             console.log('TFJS backend set to WASM');
           } catch (e) {
-            console.warn('Failed to set WASM backend, will try WebGL or CPU:', e);
+            console.warn('Failed to set WASM backend, will try WebGL or CPU. Detailed error follows:');
+            console.error(e);
           }
         }
 

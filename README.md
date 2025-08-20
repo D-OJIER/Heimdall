@@ -1,90 +1,98 @@
-# Heimdall
+# Heimdall — Minimal README
 
-Lightweight WebRTC demo + inference server. This repository contains a React + Vite frontend that uses WebRTC (via `simple-peer`) and QR codes for connection/setup, a Node-based signalling helper (`signaling.js`), and a Python FastAPI service intended for model/inference work (see `server/requirements.txt`). A `docker-compose.yml` is provided for easy local orchestration.
+Short demo: phone camera → WebRTC → receiver with overlayed detections and a small signaling server.
 
-## Project layout
+## Prerequisites
+- Node.js (16+), npm
+- Python 3.8+ (optional, for FastAPI)
 
-- `frontend/` — React + Vite frontend
-  - `src/` — application source (entry: `main.jsx`, main component: `App.jsx`, `components/WebRTCHandler.jsx`)
-  - `package.json` — frontend deps and scripts (`dev`, `build`, `preview`, `lint`)
-- `server/` — backend code
-  - `main.py` — FastAPI app (API / inference entrypoint)
-  - `signaling.js` — Node-based signaling server for WebRTC (uses `express`, `ws`)
-  - `package.json` — Node dependencies and `start` script for `signaling.js`
-  - `requirements.txt` — Python deps for FastAPI/uvicorn/onnxruntime
-- `Dockerfile`, `docker-compose.yml` — containerized setup for `frontend` and `server`
-- `bench/` — benchmark scripts
-
-## Requirements
-
-- Node.js and `npm` (frontend and signaling): recent LTS (16+ recommended)
-- Python 3.8+ (for FastAPI/onnxruntime)
-- Optionally Docker & Docker Compose to run services in containers
-
-## Quick start — development (native)
-
-1. Start the frontend
-
-	Open a terminal, then:
-
-	```powershell
-	cd frontend
-	npm install
-	npm run dev
-	```
-
-	The Vite dev server will serve the app (default port shown in the terminal; Docker config maps `3000`).
-
-2. Run the Node signalling server (WebSocket helper)
-
-	```powershell
-	cd server
-	npm install
-	npm run start
-	```
-
-	This runs `signaling.js` (uses `express` + `ws`). By default the repository is set up to run the FastAPI server separately below.
-
-3. Run the FastAPI app (Python)
-
-	```powershell
-	cd server
-	python -m venv .venv
-	.\.venv\Scripts\Activate.ps1
-	pip install -r requirements.txt
-	uvicorn main:app --host 0.0.0.0 --port 8000
-	```
-
-	The API will be reachable on port `8000` (see `docker-compose.yml` mapping).
-
-## Quick start — Docker (recommended for isolated runs)
-
-Build and start both services using Docker Compose:
+## Quick start — native
+1) Start signaling server:
 
 ```powershell
-docker-compose up --build
+cd C:\VS_Programs\Heimdall\server
+npm install
+node signaling.js
 ```
 
-Services exposed by the compose configuration:
-- Frontend: `localhost:3000` -> Vite dev server
-- Server (FastAPI): `localhost:8000`
+2) Start frontend (in another terminal):
 
-Notes:
-- The compose file mounts local `frontend/` and `server/` directories into the containers for live code edits during development.
+```powershell
+cd C:\VS_Programs\Heimdall\frontend
+npm install
+npm run dev
+```
 
-## Where to look in the code
+3) (Optional) Start FastAPI inference server:
 
-- Frontend entry: `frontend/src/main.jsx` and `frontend/src/App.jsx`
-- WebRTC handling: `frontend/src/components/WebRTCHandler.jsx`
-- Signaling: `server/signaling.js` (Node WebSocket server)
-- API / inference: `server/main.py` (FastAPI), Python deps in `server/requirements.txt`
-- Frontend dependencies: `frontend/package.json` (Vite, React, `simple-peer`, `qrcode.react`)
+```powershell
+cd C:\VS_Programs\Heimdall\server
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+uvicorn main:app --host 0.0.0.0 --port 8000
+```
+
+docker-compose up --build
+
+Detection JSON contract (server → client)
+Per-frame message (coordinates normalized to [0..1]):
+
+```json
+{
+	"frame_id": "string_or_int",
+	"capture_ts": 1690000000000,
+	"recv_ts": 1690000000100,
+	"inference_ts": 1690000000120,
+	"detections": [
+		{ "label": "person", "score": 0.93, "xmin": 0.12, "ymin": 0.08, "xmax": 0.34, "ymax": 0.67 }
+	]
+}
+```
+
+Where to look
+- `frontend/src/components/ObjectDetection.jsx` — capture, detection, send normalized detections
+- `frontend/src/components/WebRTCHandler.jsx` — WebRTC datachannel + signaling WS handling
+- `server/signaling.js` — validates detection payloads and stamps `recv_ts`
+
+If you want targeted routing, ACKs, or a UI status for backend & latency, tell me which and I will add it.
 
 ## Scripts
 
 - Frontend: `npm run dev`, `npm run build`, `npm run preview`, `npm run lint`
 - Server (Node signalling): `npm run start` (runs `signaling.js`)
 - Docker Compose: `docker-compose up --build`
+
+## WASM mode (optional)
+To run client-side detection using TFJS WASM backend follow these steps:
+
+1) Install wasm backend in the frontend folder:
+
+```powershell
+cd C:\VS_Programs\Heimdall\frontend
+npm install @tensorflow/tfjs-backend-wasm
+```
+
+2) Copy wasm binaries so they are served at `/wasm/`:
+
+```powershell
+New-Item -ItemType Directory -Force -Path .\frontend\public\wasm
+Copy-Item -Path .\frontend\node_modules\@tensorflow\tfjs-backend-wasm\dist\*.wasm -Destination .\frontend\public\wasm -Force
+```
+
+3) Start the dev server requesting WASM for this run:
+
+```powershell
+$env:VITE_TFJS_BACKEND = 'wasm'; npm run dev
+```
+
+4) Verify in the browser console after the model loads:
+
+```js
+tf.getBackend(); // should return 'wasm'
+```
+
+If the wasm files 404 or `tf.getBackend()` returns another backend, check that the `.wasm` files exist in `frontend/public/wasm` and restart the dev server.
 
 ## Troubleshooting
 
