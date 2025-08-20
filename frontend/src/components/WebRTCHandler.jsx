@@ -230,13 +230,33 @@ class WebRTCHandler {
       });
 
       this.peer.on('stream', stream => {
-        console.log('Received peer stream');
+        console.log('Received peer stream:', stream.id, 'tracks:', stream.getTracks().length);
+        // Check if stream has tracks
+        if (stream.getTracks().length === 0) {
+          console.warn('Received stream has no tracks');
+          return;
+        }
+        
+        // Ensure video track is active
+        const videoTrack = stream.getVideoTracks()[0];
+        if (videoTrack) {
+          console.log('Video track settings:', videoTrack.getSettings());
+          videoTrack.onended = () => {
+            console.log('Video track ended, attempting to reconnect...');
+            this.resetPeer();
+          };
+        }
+
         if (this.onStream) this.onStream(stream);
       });
 
       this.peer.on('error', err => {
         console.error('Peer error:', err);
-        this.resetPeer();
+        // Only reset peer for non-fatal errors
+        if (err.toString().includes('Connection failed') || 
+            err.toString().includes('disconnected')) {
+          this.resetPeer();
+        }
       });
 
       this.peer.on('close', () => {

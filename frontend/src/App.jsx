@@ -1,15 +1,9 @@
 import React, { useRef, useEffect, useState } from "react";
 import QRCode from "react-qr-code";
 import { WebRTCHandler } from "./components/WebRTCHandler.jsx";
-
-function getLocalUrl() {
-  const host = window.location.hostname;
-  const port = window.location.port;
-  return `http://${host}:${port}`;
-}
+import ObjectDetection from "./components/ObjectDetection.jsx";
 
 export default function App() {
-  const videoRef = useRef(null);
   const [qrUrl, setQrUrl] = useState("");
   const [error, setError] = useState("");
   const [connected, setConnected] = useState(false);
@@ -17,6 +11,8 @@ export default function App() {
   const [messages, setMessages] = useState([]);
   const [inputMessage, setInputMessage] = useState("");
   const webrtcRef = useRef(null);
+  const [localStream, setLocalStream] = useState(null);
+  const [remoteStream, setRemoteStream] = useState(null);
 
   useEffect(() => {
     const isMobileDevice = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
@@ -26,9 +22,8 @@ export default function App() {
     const webrtc = new WebRTCHandler(
       null,
       (stream) => {
-        if (videoRef.current) {
-          videoRef.current.srcObject = stream;
-        }
+        // Save remote stream into state so components can use it
+        setRemoteStream(stream);
       },
       () => setConnected(true),
       (message) => {
@@ -48,10 +43,9 @@ export default function App() {
         }
       })
       .then(stream => {
+        // keep stream in state for preview and detection
+        setLocalStream(stream);
         webrtc.stream = stream;
-        if (videoRef.current) {
-          videoRef.current.srcObject = stream;
-        }
         const wsUrl = `ws://${window.location.hostname}:8080`;
         webrtc.connect(wsUrl);
       })
@@ -68,6 +62,21 @@ export default function App() {
     return () => {
       if (webrtcRef.current) {
         webrtcRef.current.disconnect();
+      }
+
+      // Stop any local stream tracks we created
+      if (localStream) {
+        localStream.getTracks().forEach(t => t.stop());
+        setLocalStream(null);
+      }
+      // Optional: stop remote stream tracks if present (cleanup)
+      if (remoteStream) {
+        try {
+          remoteStream.getTracks().forEach(t => t.stop());
+        } catch (e) {
+          // ignore
+        }
+        setRemoteStream(null);
       }
     };
   }, []);
@@ -108,7 +117,7 @@ export default function App() {
     <div style={{ textAlign: "center" }}>
       <h2>Heimdall: Phone Camera Stream (WebRTC)</h2>
       {isMobile ? (
-        <video ref={videoRef} autoPlay playsInline muted style={{ width: 320, height: 240 }} />
+        <ObjectDetection videoStream={localStream} />
       ) : (
         <>
           <div>
@@ -116,7 +125,7 @@ export default function App() {
             <QRCode value={qrUrl} size={180} />
             <p>Or open: <b>{qrUrl}</b> on your phone</p>
           </div>
-          <video ref={videoRef} autoPlay playsInline style={{ width: 320, height: 240 }} />
+          <ObjectDetection videoStream={remoteStream} />
           {connected ? <div style={{ color: "green" }}>✅ Connected!</div> : <div>Waiting for connection...</div>}
         </>
       )}
