@@ -1,6 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
 import * as tf from '@tensorflow/tfjs';
 import * as cocoSsd from '@tensorflow-models/coco-ssd';
+// WASM backend support
+import '@tensorflow/tfjs-backend-wasm';
+import { setWasmPaths } from '@tensorflow/tfjs-backend-wasm';
 
 const ObjectDetection = ({ videoStream, sendDetectionToPeer, remoteDetections }) => {
   const videoRef = useRef(null);
@@ -12,9 +15,44 @@ const ObjectDetection = ({ videoStream, sendDetectionToPeer, remoteDetections })
   useEffect(() => {
     const loadModel = async () => {
       try {
+        // Choose backend via env flag (Vite uses import.meta.env, fallback to REACT_APP_*)
+        const wantWasm = (typeof import.meta !== 'undefined' && import.meta.env && import.meta.env.VITE_TFJS_BACKEND === 'wasm') || process.env.REACT_APP_TFJS_BACKEND === 'wasm';
+
+        if (wantWasm) {
+          try {
+            // Ensure the wasm files are served from /wasm/
+            setWasmPaths('/wasm/');
+            await tf.setBackend('wasm');
+            await tf.ready();
+            console.log('TFJS backend set to WASM');
+          } catch (e) {
+            console.warn('Failed to set WASM backend, will try WebGL or CPU:', e);
+          }
+        }
+
+        // If no backend chosen yet, prefer webgl then cpu
+        if (!tf.getBackend || (tf.getBackend && tf.getBackend() !== 'wasm')) {
+          try {
+            await tf.setBackend('webgl');
+            await tf.ready();
+            console.log('TFJS backend set to WebGL');
+          } catch (e) {
+            console.warn('WebGL backend not available, falling back to CPU:', e);
+            await tf.setBackend('cpu');
+            await tf.ready();
+            console.log('TFJS backend set to CPU');
+          }
+        }
+
         const loadedModel = await cocoSsd.load();
         setModel(loadedModel);
-        console.log('COCO-SSD Model loaded successfully');
+        // Expose tf to the window for easy debugging in the browser console
+        try {
+          if (typeof window !== 'undefined' && !window.tf) window.tf = tf;
+        } catch (e) {
+          // ignore in non-browser environments
+        }
+        console.log('COCO-SSD Model loaded successfully on backend', tf.getBackend());
       } catch (error) {
         console.error('Error loading COCO-SSD model:', error);
       }
