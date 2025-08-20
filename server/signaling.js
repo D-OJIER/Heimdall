@@ -30,6 +30,27 @@ app.get('/', (req, res) => {
 
 const peers = new Map();
 
+// Validate detection payloads conform to the expected schema
+function validateDetectionPayload(payload) {
+    if (!payload || typeof payload !== 'object') return { ok: false, reason: 'payload must be an object' };
+    if (payload.frame_id === undefined) return { ok: false, reason: 'missing frame_id' };
+    if (typeof payload.capture_ts !== 'number') return { ok: false, reason: 'capture_ts must be a number (ms since epoch)' };
+    if (typeof payload.inference_ts !== 'number') return { ok: false, reason: 'inference_ts must be a number (ms since epoch)' };
+    if (!Array.isArray(payload.detections)) return { ok: false, reason: 'detections must be an array' };
+    for (let i = 0; i < payload.detections.length; i++) {
+        const d = payload.detections[i];
+        if (!d || typeof d !== 'object') return { ok: false, reason: `detection[${i}] must be an object` };
+        if (typeof d.label !== 'string') return { ok: false, reason: `detection[${i}].label must be a string` };
+        if (typeof d.score !== 'number' || d.score < 0 || d.score > 1) return { ok: false, reason: `detection[${i}].score must be a number in [0,1]` };
+        const keys = ['xmin','ymin','xmax','ymax'];
+        for (const k of keys) {
+            if (typeof d[k] !== 'number' || d[k] < 0 || d[k] > 1) return { ok: false, reason: `detection[${i}].${k} must be number in [0,1]` };
+        }
+        if (!(d.xmin < d.xmax && d.ymin < d.ymax)) return { ok: false, reason: `detection[${i}] box coordinates invalid (xmin<xmax and ymin<ymax required)` };
+    }
+    return { ok: true };
+}
+
 wss.on('connection', (ws, req) => {
     console.log('New WebSocket connection from:', req.socket.remoteAddress);
     
@@ -51,6 +72,21 @@ wss.on('connection', (ws, req) => {
                 console.log('Chat payload:', data.payload && data.payload.text ? data.payload.text : '(no text)');
             }
             
+            // If this is a detection message, validate payload before broadcasting
+            if (data.type === 'detection') {
+                const payload = data.payload !== undefined ? data.payload : data;
+                const v = validateDetectionPayload(payload);
+                if (!v.ok) {
+                    console.warn('Invalid detection payload from', peerId, v.reason);
+                    try {
+                        ws.send(JSON.stringify({ type: 'error', code: 'invalid_detection', reason: v.reason }));
+                    } catch (e) {
+                        console.error('Failed to send error to peer:', peerId, e);
+                    }
+                    return; // don't broadcast invalid payloads
+                }
+            }
+            
             // Broadcast to all other peers. Forward the original payload under `payload` for consistent handling
             peers.forEach((peer, id) => {
                 if (id !== peerId && peer.readyState === WebSocket.OPEN) {
@@ -60,6 +96,15 @@ wss.on('connection', (ws, req) => {
                             from: peerId,
                             payload: data.payload !== undefined ? data.payload : data
                         };
+                        // If this is a detection message, add server recv timestamp to help clients align frames
+                        if (data.type === 'detection' && forwarded.payload && typeof forwarded.payload === 'object') {
+                            try {
+                                // create a shallow copy to avoid mutating the original payload reference
+                                forwarded.payload = Object.assign({}, forwarded.payload, { recv_ts: Date.now() });
+                            } catch (e) {
+                                // ignore if payload is not mutable
+                            }
+                        }
                         // Log the forwarded payload keys for debugging
                         console.log('Forwarding', data.type, 'to', id, 'payloadKeys:', forwarded.payload && typeof forwarded.payload === 'object' ? Object.keys(forwarded.payload) : typeof forwarded.payload);
                         peer.send(JSON.stringify(forwarded));

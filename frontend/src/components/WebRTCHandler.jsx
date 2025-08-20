@@ -1,12 +1,13 @@
 import Peer from 'simple-peer';
 
 class WebRTCHandler {
-  constructor(stream, onStream, onConnect, onMessage) {
+  constructor(stream, onStream, onConnect, onMessage, onDetection) {
     this.peer = null;
     this.stream = stream;
     this.onStream = onStream;
     this.onConnect = onConnect;
     this.onMessage = onMessage;
+    this.onDetection = onDetection;
     this.ws = null;
     this.wsUrl = null;
     this.isInitiator = false;
@@ -138,6 +139,16 @@ class WebRTCHandler {
         }
         break;
 
+      case 'detection':
+        try {
+          const det = message.payload || message.data || message;
+          console.log('Received detection message from', message.from, det && det.frame_id);
+          if (this.onDetection) this.onDetection(det);
+        } catch (e) {
+          console.error('Error handling detection message:', e);
+        }
+        break;
+
       default:
         console.log('Unknown message type:', message.type);
     }
@@ -265,9 +276,29 @@ class WebRTCHandler {
       });
 
       this.peer.on('data', data => {
-        console.log('Received message:', data.toString());
-        if (this.onMessage) {
-          this.onMessage(data.toString());
+        const str = data.toString();
+        console.log('Received datachannel message:', str.slice(0, 200));
+        try {
+          const parsed = JSON.parse(str);
+          // If it's a detection message (either raw or wrapped)
+          if (parsed && (parsed.frame_id !== undefined && parsed.detections !== undefined)) {
+            if (this.onDetection) this.onDetection(parsed);
+            return;
+          }
+          if (parsed && parsed.type === 'detection' && parsed.payload) {
+            if (this.onDetection) this.onDetection(parsed.payload);
+            return;
+          }
+          // If it's a chat or raw message type
+          if (parsed && parsed.type === 'chat' && parsed.payload && parsed.payload.text) {
+            if (this.onMessage) this.onMessage(parsed.payload.text);
+            return;
+          }
+          // Otherwise, if it's a plain object, forward stringified form to onMessage
+          if (this.onMessage) this.onMessage(typeof parsed === 'object' ? JSON.stringify(parsed) : str);
+        } catch (e) {
+          // Not JSON: treat as raw text/chat
+          if (this.onMessage) this.onMessage(str);
         }
       });
       // If we received a signal before peer was created, apply it now
@@ -289,12 +320,36 @@ class WebRTCHandler {
   sendMessage(message) {
     if (this.peer && this.peer.connected) {
       try {
-        this.peer.send(message);
+        const payload = typeof message === 'string' ? message : JSON.stringify(message);
+        this.peer.send(payload);
         return true;
       } catch (e) {
         console.error('Error sending message:', e);
         return false;
       }
+    }
+    return false;
+  }
+
+  sendDetection(detectionObj) {
+    // detectionObj must follow the contract: frame_id, capture_ts, inference_ts, detections[]
+    try {
+      const msg = typeof detectionObj === 'string' ? JSON.parse(detectionObj) : detectionObj;
+      // Basic validation
+      if (!msg || (msg.frame_id === undefined) || (msg.capture_ts === undefined) || !Array.isArray(msg.detections)) {
+        console.warn('sendDetection: invalid detection object; required: frame_id, capture_ts, detections[]', msg);
+        // still attempt to send so server can validate, but warn
+      }
+
+      // Always send detections via the signaling WebSocket so the server can add recv_ts
+      if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+        this.sendToServer({ type: 'detection', payload: msg });
+        return true;
+      } else {
+        console.warn('sendDetection: WebSocket not open; cannot send detection.');
+      }
+    } catch (e) {
+      console.error('Error in sendDetection:', e);
     }
     return false;
   }

@@ -10,6 +10,7 @@ export default function App() {
   const [isMobile, setIsMobile] = useState(false);
   const [messages, setMessages] = useState([]);
   const [inputMessage, setInputMessage] = useState("");
+  const [remoteDetections, setRemoteDetections] = useState([]);
   const webrtcRef = useRef(null);
   const [localStream, setLocalStream] = useState(null);
   const [remoteStream, setRemoteStream] = useState(null);
@@ -28,6 +29,15 @@ export default function App() {
       () => setConnected(true),
       (message) => {
         setMessages(prev => [...prev, { text: message, received: true }]);
+      }
+      ,(detectionMsg) => {
+        // ensure normalized detections array exists
+        try {
+          if (detectionMsg && detectionMsg.detections) {
+            setRemoteDetections(prev => [...prev, detectionMsg]);
+            console.log('Stored remote detection for frame', detectionMsg.frame_id);
+          }
+        } catch (e) { console.error('onDetection handler error', e); }
       }
     );
 
@@ -117,7 +127,7 @@ export default function App() {
     <div style={{ textAlign: "center" }}>
       <h2>Heimdall: Phone Camera Stream (WebRTC)</h2>
       {isMobile ? (
-        <ObjectDetection videoStream={localStream} />
+        <ObjectDetection videoStream={localStream} sendDetectionToPeer={(d) => webrtcRef.current && webrtcRef.current.sendDetection(d)} />
       ) : (
         <>
           <div>
@@ -125,7 +135,7 @@ export default function App() {
             <QRCode value={qrUrl} size={180} />
             <p>Or open: <b>{qrUrl}</b> on your phone</p>
           </div>
-          <ObjectDetection videoStream={remoteStream} />
+          <ObjectDetection videoStream={remoteStream} remoteDetections={remoteDetections} />
           {connected ? <div style={{ color: "green" }}>✅ Connected!</div> : <div>Waiting for connection...</div>}
         </>
       )}
