@@ -354,6 +354,19 @@ class WebRTCHandler {
     return false;
   }
 
+  // Send arbitrary telemetry payloads over the signaling WebSocket (server will forward)
+  sendTelemetry(payload) {
+    try {
+      if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+        this.sendToServer({ type: 'telemetry', payload });
+        return true;
+      }
+    } catch (e) {
+      console.error('Error sending telemetry via WS:', e);
+    }
+    return false;
+  }
+
   resetPeer() {
     if (this.peer) {
       this.peer.destroy();

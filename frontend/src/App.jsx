@@ -52,7 +52,7 @@ export default function App() {
         setRemoteStream(stream);
       },
       () => setConnected(true),
-      (message) => {
+  (message) => {
         setMessages(prev => [...prev, { text: message, received: true }]);
       }
       ,(detectionMsg) => {
@@ -67,6 +67,11 @@ export default function App() {
     );
 
     webrtcRef.current = webrtc;
+
+    // Expose telemetry send function on window for components to call (shallow global wiring)
+    try {
+      window.__sendTelemetry = (t) => webrtcRef.current && webrtcRef.current.sendTelemetry && webrtcRef.current.sendTelemetry(t);
+    } catch (e) {}
 
     if (isMobileDevice) {
       // Mobile device: get camera and start as initiator
@@ -113,6 +118,7 @@ export default function App() {
         }
         setRemoteStream(null);
       }
+  try { window.__sendTelemetry = null; } catch (e) {}
     };
   }, []);
 
@@ -189,7 +195,8 @@ export default function App() {
             <ObjectDetection
               videoStream={remoteStream}
               remoteDetections={remoteDetections}
-              sendDetectionToPeer={(d) => webrtcRef.current && webrtcRef.current.sendDetection(d)}
+                    sendDetectionToPeer={(d) => webrtcRef.current && webrtcRef.current.sendDetection(d)}
+                    sendTelemetryToPeer={(t) => webrtcRef.current && webrtcRef.current.sendTelemetry(t)}
               enableLocalDetection={!serverMode}
             />
             <div className="connection-state">{connected ? 'Connected' : 'Waiting for connection...'}</div>

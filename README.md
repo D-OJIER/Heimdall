@@ -225,6 +225,129 @@ If you want to run both signaling and inference together using Docker Compose, c
 - If Python dependencies fail to install (onnxruntime), check platform-specific wheels or use a matching Python version.
 - If WebRTC connections fail, confirm both clients can reach the signaling server (check browser console/network and `signaling.js` logs).
 
+### Quick troubleshooting tips
+
+- If a phone won’t connect:
+	- Ensure the phone and laptop are on the same network (same Wi‑Fi/LAN). Use the host LAN IP + port (e.g. `http://192.168.1.42:5173`) shown in the `Phone / remote join` section.
+	- If you must connect across NAT/Internet, use a tunnel service such as `ngrok` or `localtunnel` and update signaling/WS URLs accordingly. Example with ngrok:
+
+		```powershell
+		# expose the frontend dev server port
+		ngrok http 5173
+		# open the HTTP forwarding URL that ngrok prints
+		```
+
+- If overlays are misaligned or timestamps look wrong:
+	- Confirm the detection JSON includes `capture_ts` and that `recv_ts` is present (signaling stamps `recv_ts`). Ensure these are epoch milliseconds (ms) consistently — mismatched units (seconds vs ms) will break latency math.
+	- If you need the exact client-side overlay draw time, add a tiny telemetry POST or WS message from the frontend with `{ frame_id, overlay_display_ts: Date.now() }` so the bench can compute `overlay_display_ts - capture_ts` accurately.
+
+- If CPU is high on the client or worker:
+	- Reduce capture resolution to `320x240` (see `ObjectDetection.jsx` where capture draws to an offscreen canvas at `320x240`).
+	- Prefer WASM/client mode for lighter server load by running the TFJS WASM backend in the browser (see WASM mode section).
+
+- Use Chrome `webrtc-internals` to inspect packet timings, jitter, and per-RTCP report statistics:
+	- Open a new tab and navigate to `chrome://webrtc-internals/` while a call is active.
+	- Look for DataChannel and RTP stream timing, packet loss, and jitter values — these help correlate network jitter to observed overlay delays.
+
+- Bandwidth measurement:
+	- For a quick estimate use OS tools while a bench run is active (Windows: `nethogs`/`ifstat` via WSL; Linux: `ifstat`, `nethogs`, `iftop`).
+	- Alternatively capture bytes sent/received from the bench scripts (they report `bytes_sent` / `bytes_received` and convert to kbps in `bench/metrics.json`).
+
+## Candidate run (quick)
+
+Follow these concise, copy-paste steps to run a candidate locally and collect metrics. The examples below assume a Unix-like shell; on Windows use the PowerShell equivalents used elsewhere in this README.
+
+1. Clone the repository and change directory:
+
+```bash
+git clone <repo>
+cd Heimdall
+```
+
+2. Start the app (choose one):
+
+- Quick local start (defaults to WASM mode if no GPU detected):
+
+```bash
+./start.sh
+# To enable ngrok tunneling from the helper: ./start.sh --ngrok
+```
+
+- Or start with Docker Compose:
+
+```bash
+docker-compose up --build
+```
+
+3. Open the frontend on your laptop and scan the QR code with your phone:
+
+```
+http://localhost:3000
+# (or Vite default: http://localhost:5173)
+```
+
+4. Allow camera access on the phone; you should see the phone video mirrored in the laptop browser with detection overlays.
+
+5. Run the bench (WASM example):
+
+```bash
+./bench/run_bench.sh --duration 30 --mode wasm
+cat bench/metrics.json
+```
+
+6. If the phone cannot reach the laptop directly (NAT/firewall), start ngrok and copy the public URL to your phone:
+
+```bash
+./start.sh --ngrok
+# copy the public URL printed by ngrok and open it on your phone
+```
+
+Notes:
+- The default frontend port may be `5173` (Vite) or `3000` depending on how you start it; open the correct port on your laptop.
+- `./start.sh` is a convenience helper; the "Simple start (recommended)" section has the explicit per-service commands if you prefer to start things manually.
+
+## Telemetry & bench notes
+
+- Client telemetry: the frontend now emits a small telemetry message that helps the bench compute exact overlay latencies. When the overlay is drawn the frontend will (best-effort) send via the signaling WebSocket a message of the form:
+
+```json
+{ "type": "telemetry", "payload": { "frame_id": "<frame_id>", "overlay_display_ts": 1690000000000 } }
+```
+
+	The bench runner (`bench/bench_server_mode.py`) will prefer `overlay_display_ts` from telemetry when available; otherwise it falls back to the receiver's local receive timestamp as a proxy.
+
+- Live bench dependencies: to run a live server-mode bench (not the simulate fallback) install the Python WebSocket client:
+
+```powershell
+pip install websocket-client
+```
+
+- Run the server-mode bench (30s example):
+
+```powershell
+./bench/run_bench.sh --duration 30 --mode server --signaling-url ws://localhost:8080
+cat bench/metrics.json
+```
+
+- Note: `bench/metrics.json` includes these fields: median & P95 E2E latency (ms), median & P95 server latency (ms), median & P95 network latency (ms), `fps`, `uplink_kbps`, `downlink_kbps`, and raw `bytes_sent` / `bytes_received` totals.
+
+## Backpressure and low-resource guidance
+
+- The capture path currently downsizes frames to `320x240` and uses a target capture FPS (default ~12). To avoid build-up under load you should enforce a simple backpressure policy such as "single outstanding frame" (skip capture send when an inference is in-flight) or maintain a tiny queue and always drop older frames. This repository currently emits telemetry and provides bench tools; if you'd like I can implement the `inflight` drop policy in `ObjectDetection.jsx` (recommended for modest laptops).
+
+## ngrok / tunneling note
+
+- The README mentions `./start.sh --ngrok` as a convenience idea. The current `start.sh` does not automatically start `ngrok` — use ngrok manually if needed:
+
+```powershell
+# in a separate terminal, install and run ngrok
+ngrok http 5173
+# copy the public URL and open it on your phone
+```
+
+
+
+
 ## Next steps / TODOs
 
 - Add tests and CI for frontend and server.

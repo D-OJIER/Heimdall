@@ -364,6 +364,32 @@ const ObjectDetection = ({ videoStream, sendDetectionToPeer, remoteDetections, o
     // draw immediately and whenever dependencies change
     draw();
 
+    // telemetry: send overlay_display_ts for the most recent detection frame
+    try {
+      if (Array.isArray(serverDetections) && serverDetections.length > 0) {
+        const latest = serverDetections[serverDetections.length - 1];
+        if (latest && latest.frame_id) {
+          const overlayTs = Date.now();
+          // send one telemetry message; ensure live WS or datachannel telemetry function exists
+          try {
+            // prefer WebRTCHandler telemetry if provided via prop on the parent App
+            if (typeof window !== 'undefined' && window.__sendTelemetry) {
+              window.__sendTelemetry({ frame_id: latest.frame_id, overlay_display_ts: overlayTs });
+            }
+            // also attempt local live WS if open
+            const wsLocal = liveWsRef.current;
+            if (wsLocal && wsLocal.readyState === WebSocket.OPEN) {
+              try { wsLocal.send(JSON.stringify({ type: 'telemetry', payload: { frame_id: latest.frame_id, overlay_display_ts: overlayTs } })); } catch (e) {}
+            }
+            // if parent passed a sendTelemetryToPeer prop, use it (via global to avoid deep prop threading here)
+            // Parent App sets window.__sendTelemetry when it receives the handler, see App.jsx
+          } catch (e) {
+            // best-effort: do not crash
+          }
+        }
+      }
+    } catch (e) {}
+
     // redraw on video resize events
     video.addEventListener('resize', draw);
     // cleanup

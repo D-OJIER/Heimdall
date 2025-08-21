@@ -1,22 +1,34 @@
-version: '3'
+version: '3.8'
 services:
   frontend:
     build:
-      context: .
+      context: ./frontend
       dockerfile: Dockerfile
     ports:
-      - "3000:3000"
-    working_dir: /app/frontend
-    command: ["npm", "run", "dev"]
+      - "5173:5173"
+    working_dir: /app
+    command: ["sh", "-c", "npm run dev -- --host 0.0.0.0"]
     volumes:
-      - ./frontend:/app/frontend
-  server:
+      - ./frontend:/app
+    environment:
+      - CHOKIDAR_USEPOLLING=true
+
+  signaling:
     build:
-      context: .
+      context: ./server
       dockerfile: Dockerfile
+    command: ["node", "signaling.js"]
     ports:
-      - "8000:8000"
-    working_dir: /app/server
-    command: ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
+      - "8080:8080"
     volumes:
-      - ./server:/app/server
+      - ./server:/app
+
+  receiver:
+    build:
+      context: ./server
+      dockerfile: python.Dockerfile
+    command: ["uvicorn", "live_receiver:app", "--host", "0.0.0.0", "--port", "8001"]
+    ports:
+      - "8001:8001"
+    volumes:
+      - ./server:/app
