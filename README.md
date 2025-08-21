@@ -93,6 +93,10 @@ tf.getBackend(); // should return 'wasm'
 ```
 
 If the wasm files 404 or `tf.getBackend()` returns another backend, check that the `.wasm` files exist in `frontend/public/wasm` and restart the dev server.
+### Running the worker in Docker (recommended on Windows)
+
+If you want to run both signaling and inference together using Docker Compose, create a `server/docker-compose.yml` and run it. A sample `docker-compose.yml` is included in the `server/` folder.
+
 
 ## Troubleshooting
 
@@ -105,3 +109,54 @@ If the wasm files 404 or `tf.getBackend()` returns another backend, check that t
 - Add tests and CI for frontend and server.
 - Add a simple README section describing the API endpoints implemented in `main.py`.
 - Optional: consolidate signaling into the FastAPI app or document how to run both signaling and API together behind a single reverse proxy.
+
+## Node.js inference worker (optional)
+
+You can run an all-JavaScript inference worker that connects to the signaling server, accepts frame images (base64), runs COCO-SSD using `@tensorflow/tfjs-node`, and sends detection messages back through the signaling WebSocket.
+
+1) Install server deps (this will include tfjs-node and coco-ssd):
+
+```powershell
+cd C:\VS_Programs\Heimdall\server
+npm install
+```
+
+2) Start the signaling server (if not already running):
+
+```powershell
+node signaling.js
+```
+
+3) Start the inference worker (in a separate terminal):
+
+```powershell
+npm run inference
+```
+
+By default the worker connects to `ws://localhost:8080`. You can override with `SIGNALING_URL` environment variable.
+
+Message contract for frames the worker expects (example format):
+
+```json
+{ "type": "frame", "payload": { "frame_id": "123", "image_b64": "data:image/jpeg;base64,..." } }
+```
+
+The worker sends back a `detection` message with the normalized detection JSON (same contract used by clients). The signaling server will add `recv_ts` before broadcasting.
+
+### Running the worker in Docker (recommended on Windows)
+
+If `@tensorflow/tfjs-node` native bindings fail to load on Windows, run the worker in a Linux container where prebuilt binaries are available:
+
+```powershell
+# Build image (from repo root)
+docker build -f server/Dockerfile -t heimdall-inference:latest ./server
+
+# Run container and connect to local signaling server
+docker run --rm -e SIGNALING_URL=ws://host.docker.internal:8080 heimdall-inference:latest
+```
+
+On Linux or macOS you can use `ws://host.docker.internal:8080` or the host IP as appropriate.
+
+### Alternative: use Node LTS (18/20)
+
+`@tensorflow/tfjs-node` often provides prebuilt binaries for Node LTS releases. If you're on Node 22 and the binary is not available, consider switching to Node 18 or 20 with `nvm`/`nvm-windows` and re-running `npm install`.

@@ -1,0 +1,9 @@
+node_modules
+npm-debug.log
+package-lock.json
+.DS_Store
+.env
+*.tgz
+# avoid copying local build artifacts
+build
+dist

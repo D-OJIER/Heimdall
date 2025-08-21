@@ -1,0 +1,13 @@
+.venv/
+venv/
+env/
+__pycache__/
+*.py[cod]
+*.log
+frames/
+models/*.onnx
+models/*.pt
+*.sqlite3
+node_modules/
+npm-debug.log*
+.env

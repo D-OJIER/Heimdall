@@ -1,0 +1,107 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>YOLOv5 Live Client</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 16px; }
+    video, canvas, img { border: 1px solid #ccc; max-width: 640px; display: block; margin-bottom: 8px; }
+    #controls { margin-bottom: 12px; }
+    #detections { white-space: pre-wrap; font-family: monospace; }
+  </style>
+</head>
+<body>
+  <h2>YOLOv5 Live Client</h2>
+  <div id="controls">
+    <button id="startBtn">Start</button>
+    <button id="stopBtn" disabled>Stop</button>
+    <label>FPS: <input id="fps" type="number" value="5" min="1" max="30" style="width:60px"/></label>
+    <label>WS URL: <input id="wsUrl" type="text" value="ws://localhost:8001/ws/live" style="width:320px"/></label>
+  </div>
+  <video id="video" autoplay muted playsinline width="640" height="480"></video>
+  <canvas id="canvas" width="640" height="480" style="display:none"></canvas>
+  <h3>Annotated (server) -></h3>
+  <img id="annotated" alt="annotated frame" />
+  <h3>Detections</h3>
+  <div id="detections">(none)</div>
+
+  <script>
+    const startBtn = document.getElementById('startBtn')
+    const stopBtn = document.getElementById('stopBtn')
+    const video = document.getElementById('video')
+    const canvas = document.getElementById('canvas')
+    const annotated = document.getElementById('annotated')
+    const detectionsDiv = document.getElementById('detections')
+    const fpsInput = document.getElementById('fps')
+    const wsUrlInput = document.getElementById('wsUrl')
+
+    let ws = null
+    let stream = null
+    let sendInterval = null
+
+    async function start() {
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({video: true, audio: false})
+        video.srcObject = stream
+        await video.play()
+      } catch (e) {
+        alert('Failed to open webcam: ' + e)
+        return
+      }
+
+      const wsUrl = wsUrlInput.value
+      ws = new WebSocket(wsUrl)
+      ws.onopen = () => {
+        console.log('ws open')
+        startBtn.disabled = true
+        stopBtn.disabled = false
+        const fps = Math.max(1, parseInt(fpsInput.value || '5'))
+        const interval = 1000 / fps
+        sendInterval = setInterval(sendFrame, interval)
+      }
+      ws.onmessage = (ev) => {
+        try {
+          const data = JSON.parse(ev.data)
+          if (data.annotated_b64) annotated.src = data.annotated_b64
+          if (data.detections) {
+            if (data.detections.length === 0) detectionsDiv.textContent = '(no detections)'
+            else {
+              const lines = data.detections.map(d => `${d.label} ${d.score.toFixed(2)} [${(d.xmin*100).toFixed(1)}%, ${(d.ymin*100).toFixed(1)}% -> ${(d.xmax*100).toFixed(1)}%, ${(d.ymax*100).toFixed(1)}%]`)
+              detectionsDiv.textContent = lines.join('\n')
+            }
+          }
+        } catch (e) { console.warn('invalid ws message', e) }
+      }
+      ws.onclose = () => { console.log('ws closed'); stop(); }
+      ws.onerror = (e) => { console.error('ws error', e); }
+    }
+
+    function stop() {
+      if (sendInterval) { clearInterval(sendInterval); sendInterval = null }
+      if (ws) { ws.close(); ws = null }
+      if (stream) {
+        stream.getTracks().forEach(t => t.stop())
+        stream = null
+      }
+      startBtn.disabled = false
+      stopBtn.disabled = true
+    }
+
+    function sendFrame() {
+      if (!ws || ws.readyState !== WebSocket.OPEN) return
+      const ctx = canvas.getContext('2d')
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height)
+      // compress to jpeg data URL
+      const dataUrl = canvas.toDataURL('image/jpeg', 0.8)
+      const payload = { frame_id: `frame-${Date.now()}`, image_b64: dataUrl }
+      ws.send(JSON.stringify(payload))
+    }
+
+    startBtn.addEventListener('click', start)
+    stopBtn.addEventListener('click', stop)
+
+    // clean up on page unload
+    window.addEventListener('beforeunload', () => { stop() })
+  </script>
+</body>
+</html>

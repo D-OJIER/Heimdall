@@ -2,3 +2,4 @@ fastapi
 uvicorn
 onnxruntime
 websockets
+psutil

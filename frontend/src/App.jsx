@@ -14,10 +14,23 @@ export default function App() {
   const webrtcRef = useRef(null);
   const [localStream, setLocalStream] = useState(null);
   const [remoteStream, setRemoteStream] = useState(null);
+  const [backend, setBackend] = useState('');
+  const [serverMode, setServerMode] = useState(false);
 
   useEffect(() => {
     const isMobileDevice = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
-    setIsMobile(isMobileDevice);
+    // Allow forcing local camera preview via query param ?forceLocal=1 (useful for desktop testing)
+    const urlParams = new URLSearchParams(window.location.search);
+    const forceLocal = urlParams.get('forceLocal') === '1' || urlParams.get('local') === '1';
+  // Server mode: if ?mode=server or VITE_MODE=server then server mode is active
+  const modeParam = urlParams.get('mode') || (typeof import.meta !== 'undefined' && import.meta.env && import.meta.env.VITE_MODE) || process.env.REACT_APP_MODE;
+  const isServerMode = modeParam === 'server';
+  // store server mode in state
+  setServerMode(isServerMode);
+    if (forceLocal && !isMobileDevice) {
+      console.log('Forcing local camera preview due to ?forceLocal=1');
+    }
+  setIsMobile(isMobileDevice || forceLocal);
     setQrUrl(window.location.href);
 
     const webrtc = new WebRTCHandler(
@@ -126,8 +139,25 @@ export default function App() {
   return (
     <div style={{ textAlign: "center" }}>
       <h2>Heimdall: Phone Camera Stream (WebRTC)</h2>
+      {/* Backend/Mode display - prefer showing SERVER when remote detections are present */}
+      <div style={{ marginBottom: 8, fontWeight: 500 }}>
+        {serverMode ? (
+          'Running on: SERVER'
+        ) : remoteDetections && remoteDetections.length > 0 ? (
+          'Running on: SERVER'
+        ) : isMobile ? (
+          backend ? `Running on: ${backend.toUpperCase()}` : 'Detecting backend...'
+        ) : (
+          'Waiting for detections...'
+        )}
+      </div>
       {isMobile ? (
-        <ObjectDetection videoStream={localStream} sendDetectionToPeer={(d) => webrtcRef.current && webrtcRef.current.sendDetection(d)} />
+        <ObjectDetection
+          videoStream={localStream}
+          sendDetectionToPeer={(d) => webrtcRef.current && webrtcRef.current.sendDetection(d)}
+          onBackendChange={setBackend}
+          enableLocalDetection={!serverMode}
+        />
       ) : (
         <>
           <div>
@@ -135,12 +165,16 @@ export default function App() {
             <QRCode value={qrUrl} size={180} />
             <p>Or open: <b>{qrUrl}</b> on your phone</p>
           </div>
-          <ObjectDetection videoStream={remoteStream} remoteDetections={remoteDetections} />
-          {connected ? <div style={{ color: "green" }}>✅ Connected!</div> : <div>Waiting for connection...</div>}
+          <ObjectDetection
+            videoStream={remoteStream}
+            remoteDetections={remoteDetections}
+            sendDetectionToPeer={(d) => webrtcRef.current && webrtcRef.current.sendDetection(d)}
+            enableLocalDetection={!serverMode}
+          />
+          {connected ? <div style={{ color: "green" }}>2705 Connected!</div> : <div>Waiting for connection...</div>}
         </>
       )}
       {error && <div style={{ color: "red" }}>{error}</div>}
-      
       {connected && (
         <div style={{ marginTop: "20px", maxWidth: "600px", margin: "20px auto" }}>
           <div style={{

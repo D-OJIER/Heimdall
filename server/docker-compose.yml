@@ -1,0 +1,36 @@
+version: '3.8'
+services:
+  signaling:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: node signaling.js
+    ports:
+      - "8080:8080"
+    restart: unless-stopped
+
+  inference:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: node inference_server.js
+    depends_on:
+      - signaling
+    environment:
+      SIGNALING_URL: ws://signaling:8080
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ../frontend
+      dockerfile: Dockerfile
+    command: npm run dev -- --host 0.0.0.0
+    ports:
+      - "5173:5173"
+      - "3000:3000"
+    depends_on:
+      - signaling
+    environment:
+      # Let the frontend connect to signaling at host 'signaling' inside compose
+      VITE_CUSTOM_SIGNALING_HOST: signaling
+    restart: unless-stopped

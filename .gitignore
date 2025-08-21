@@ -1,3 +1,52 @@
+### General
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+.cache/
+
+### Node
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-lock.yaml
+
+### Python
+__pycache__/
+*.py[cod]
+*.so
+.Python
+env/
+venv/
+.venv/
+ENV/
+env.bak/
+venv.bak/
+*.egg-info/
+.eggs/
+
+### Build / Coverage
+dist/
+build/
+coverage/
+.pytest_cache/
+
+### Envs & secrets
+.env
+.env.*
+.env.local
+server/.env
+frontend/.env
+
+### Logs and temp
+*.log
+*.tmp
+*.swp
+
+### Project-specific
+/server/frames/
+/frontend/dist/
 # Node/Vite/React
 node_modules/
 dist/

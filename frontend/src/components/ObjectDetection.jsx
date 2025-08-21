@@ -5,53 +5,50 @@ import * as cocoSsd from '@tensorflow-models/coco-ssd';
 import '@tensorflow/tfjs-backend-wasm';
 import { setWasmPaths } from '@tensorflow/tfjs-backend-wasm';
 
-const ObjectDetection = ({ videoStream, sendDetectionToPeer, remoteDetections }) => {
+
+const ObjectDetection = ({ videoStream, sendDetectionToPeer, remoteDetections, onBackendChange, enableLocalDetection = true }) => {
   const videoRef = useRef(null);
   const canvasRef = useRef(null);
   const [model, setModel] = useState(null);
   const [isDetecting, setIsDetecting] = useState(false);
+  const [backend, setBackend] = useState('');
 
   // Load the COCO-SSD model
   useEffect(() => {
     const loadModel = async () => {
       try {
-        // Choose backend via env flag (Vite uses import.meta.env, fallback to REACT_APP_*)
-        const wantWasm = (typeof import.meta !== 'undefined' && import.meta.env && import.meta.env.VITE_TFJS_BACKEND === 'wasm') || process.env.REACT_APP_TFJS_BACKEND === 'wasm';
-
-        if (wantWasm) {
+        if (!enableLocalDetection) {
+          // Server mode (YOLO) - dispose any local model
+          console.log('Server mode active - using YOLO for inference');
           try {
-            // Ensure the wasm files are served from /wasm/
-            setWasmPaths('/wasm/');
-
-            // Quick network check to validate wasm files are being served
-            try {
-              const wasmTest = await fetch('/wasm/tfjs-backend-wasm.wasm', { method: 'GET' });
-              console.log('WASM file fetch status:', wasmTest.status, '/wasm/tfjs-backend-wasm.wasm');
-            } catch (netErr) {
-              console.warn('Failed to fetch wasm file at /wasm/tfjs-backend-wasm.wasm — it may not be served correctly:', netErr);
+            if (model && model.dispose) {
+              model.dispose();
             }
-
-            await tf.setBackend('wasm');
-            await tf.ready();
-            console.log('TFJS backend set to WASM');
           } catch (e) {
-            console.warn('Failed to set WASM backend, will try WebGL or CPU. Detailed error follows:');
-            console.error(e);
+            // ignore dispose errors
           }
+          setModel(null);
+          setBackend('server');
+          if (onBackendChange) onBackendChange('server');
+          return;
         }
 
-        // If no backend chosen yet, prefer webgl then cpu
-        if (!tf.getBackend || (tf.getBackend && tf.getBackend() !== 'wasm')) {
-          try {
-            await tf.setBackend('webgl');
-            await tf.ready();
-            console.log('TFJS backend set to WebGL');
-          } catch (e) {
-            console.warn('WebGL backend not available, falling back to CPU:', e);
-            await tf.setBackend('cpu');
-            await tf.ready();
-            console.log('TFJS backend set to CPU');
+        console.log('Local mode - loading COCO-SSD with WASM backend');
+
+        // Always use WASM backend for local COCO-SSD
+        try {
+          setWasmPaths('/wasm/');
+          const wasmTest = await fetch('/wasm/tfjs-backend-wasm.wasm', { method: 'GET' });
+          if (!wasmTest.ok) {
+            throw new Error('WASM file not available - check /wasm/tfjs-backend-wasm.wasm');
           }
+          await tf.setBackend('wasm');
+          await tf.ready();
+          console.log('TFJS WASM backend ready for COCO-SSD');
+        } catch (e) {
+          console.error('Failed to set up WASM backend:', e);
+          alert('WASM setup failed - check console and ensure /wasm/ files are served');
+          return; // don't proceed without WASM
         }
 
         const loadedModel = await cocoSsd.load();
@@ -62,14 +59,17 @@ const ObjectDetection = ({ videoStream, sendDetectionToPeer, remoteDetections })
         } catch (e) {
           // ignore in non-browser environments
         }
-        console.log('COCO-SSD Model loaded successfully on backend', tf.getBackend());
+        const backendName = tf.getBackend ? tf.getBackend() : '';
+        setBackend(backendName);
+        if (onBackendChange) onBackendChange(backendName);
+        console.log('COCO-SSD Model loaded successfully on backend', backendName);
       } catch (error) {
         console.error('Error loading COCO-SSD model:', error);
       }
     };
 
-    loadModel();
-  }, []);
+  loadModel();
+  }, [onBackendChange, enableLocalDetection]);
 
   // Set up video stream with error handling and reconnection logic
   useEffect(() => {
@@ -99,8 +99,14 @@ const ObjectDetection = ({ videoStream, sendDetectionToPeer, remoteDetections })
           });
 
           // Attempt to play the video
-          await videoElement.play();
-          console.log('Video playback started successfully');
+          try {
+            await videoElement.play();
+            console.log('Video playback started successfully');
+          } catch (playErr) {
+            console.warn('Video.play() failed:', playErr);
+            // Log current readyState and srcObject
+            console.log('video.readyState:', videoElement.readyState, 'srcObject:', !!videoElement.srcObject);
+          }
           
           // Monitor video track status
           const videoTrack = videoStream.getVideoTracks()[0];
@@ -138,6 +144,64 @@ const ObjectDetection = ({ videoStream, sendDetectionToPeer, remoteDetections })
     };
   }, [videoStream]);
 
+  // When local detection is disabled (server mode), periodically capture frames and POST to server for inference
+  useEffect(() => {
+    if (enableLocalDetection) return;
+    if (!videoRef.current) return;
+
+  let stopped = false;
+  const captureInterval = 250; // ms (reduced from 700 -> faster updates)
+  let inflight = false; // prevent overlapping requests
+
+  // build infer host from Vite env or fallback to page hostname
+  const envInferHost = (typeof import.meta !== 'undefined' && import.meta.env && import.meta.env.VITE_INFER_HOST) || null;
+  const inferHost = envInferHost || `${window.location.protocol}//${window.location.hostname}:8000`;
+
+  const sendFrame = async () => {
+      if (stopped) return;
+      try {
+        const video = videoRef.current;
+        if (!video || video.readyState < 2) {
+          setTimeout(sendFrame, captureInterval);
+          return;
+        }
+
+        // draw to an offscreen canvas at smaller size to reduce bandwidth and latency
+        const off = document.createElement('canvas');
+        const w = 320; const h = Math.round((video.videoHeight / video.videoWidth) * w) || 240;
+        off.width = w; off.height = h;
+        const ctx = off.getContext('2d');
+        ctx.drawImage(video, 0, 0, w, h);
+        const b64 = off.toDataURL('image/jpeg', 0.6);
+        const frameId = `frame-${Date.now()}-${Math.round(Math.random()*1000)}`;
+
+  // send to server infer endpoint
+  const url = `${inferHost.replace(/\/$/, '')}/infer_frame`;
+        // avoid sending if still waiting for previous inference result
+        if (inflight) {
+          // schedule next attempt
+          setTimeout(sendFrame, captureInterval);
+          return;
+        }
+        inflight = true;
+        fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ frame_id: frameId, image_b64: b64 })
+        }).catch(err => console.warn('Failed to send frame to server infer endpoint:', err))
+        .finally(() => { inflight = false; });
+      } catch (e) {
+        console.error('Error capturing frame for server inference:', e);
+      } finally {
+        setTimeout(sendFrame, captureInterval);
+      }
+    };
+
+    sendFrame();
+
+    return () => { stopped = true; };
+  }, [enableLocalDetection, videoRef.current]);
+
   // Add event listeners for video element
   useEffect(() => {
     if (!videoRef.current) return;
@@ -167,13 +231,15 @@ const ObjectDetection = ({ videoStream, sendDetectionToPeer, remoteDetections })
 
   // Detect objects in the video stream
   useEffect(() => {
+    if (!enableLocalDetection) return; // do not run detection loop when local detection disabled
     if (!model || !videoRef.current || !canvasRef.current) return;
 
     const video = videoRef.current;
     const canvas = canvasRef.current;
     const context = canvas.getContext('2d');
 
-    const detectObjects = async () => {
+  let rafId = null;
+  const detectObjects = async () => {
       if (!isDetecting) return;
 
       // Make sure video is ready and playing
@@ -269,13 +335,23 @@ const ObjectDetection = ({ videoStream, sendDetectionToPeer, remoteDetections })
       }
 
       // Request next frame
-      requestAnimationFrame(detectObjects);
+      rafId = requestAnimationFrame(detectObjects);
     };
 
-    setIsDetecting(true);
-    detectObjects();
+  setIsDetecting(true);
+  detectObjects();
 
-    return () => setIsDetecting(false);
+  return () => {
+    setIsDetecting(false);
+    if (rafId) cancelAnimationFrame(rafId);
+    // attempt to release TFJS tensors if any
+    try {
+      if (window.tf && window.tf.engine && window.tf.engine().disposeVariables) {
+        // best-effort cleanup
+        window.tf.engine().disposeVariables && window.tf.engine().disposeVariables();
+      }
+    } catch (e) {}
+  };
   }, [model, videoStream]);
 
   return (
@@ -303,8 +379,89 @@ const ObjectDetection = ({ videoStream, sendDetectionToPeer, remoteDetections })
           zIndex: 1
         }}
       />
+  {/* Backend display (only for local/capture mode) */}
+  {enableLocalDetection && typeof sendDetectionToPeer === 'function' && backend && (
+        <div style={{
+          position: 'absolute',
+          bottom: 4,
+          right: 8,
+          background: 'rgba(0,0,0,0.6)',
+          color: '#fff',
+          padding: '2px 8px',
+          borderRadius: '6px',
+          fontSize: '13px',
+          zIndex: 2
+        }}>
+          Backend: {backend.toUpperCase()}
+          {model ? <span style={{ marginLeft: 8 }}>• Model: COCO-SSD</span> : null}
+        </div>
+      )}
+
+  {/* Model status badge for server-mode */}
+  {!enableLocalDetection && (
+    <ModelStatusBadge inferHost={(typeof import.meta !== 'undefined' && import.meta.env && import.meta.env.VITE_INFER_HOST) || null} />
+  )}
     </div>
   );
 };
 
 export default ObjectDetection;
+
+
+// Small component that polls /model_status and shows which model is loaded
+function ModelStatusBadge({ inferHost = null }) {
+  const [status, setStatus] = useState('unknown');
+  const [cpu, setCpu] = useState(null);
+  const [modelName, setModelName] = useState(null);
+  const host = inferHost || `${window.location.protocol}//${window.location.hostname}:8000`;
+
+  useEffect(() => {
+    let stopped = false;
+    const poll = async () => {
+      if (stopped) return;
+      try {
+        const res = await fetch(`${host.replace(/\/$/, '')}/model_status`);
+        if (!res.ok) throw new Error('model_status fetch failed');
+        const j = await res.json();
+  setStatus(j.loaded_model_type || 'none');
+  setCpu(j.cpu_percent ?? null);
+  setModelName(j.model_name ?? null);
+      } catch (e) {
+        setStatus('none');
+  setCpu(null);
+      } finally {
+        setTimeout(poll, 2000);
+      }
+    };
+    poll();
+    return () => { stopped = true; };
+  }, [host]);
+
+  const color = status === 'onnx' ? '#28a745' : status === 'pt' ? '#007bff' : '#666';
+
+  // Display both model and processing location + CPU when in server-mode
+  const processingText = status && status !== 'none' ? `SERVER${cpu !== null ? ` (CPU ${cpu}%)` : ''}` : 'NONE';
+
+  // derive friendly family name
+  let family = null;
+  if (modelName) {
+    const lower = modelName.toLowerCase();
+    if (lower.includes('yolo') || lower.includes('yolov5') || lower.includes('yolov4')) family = 'YOLO';
+    else if (lower.includes('coco') || lower.includes('ssd')) family = 'COCO-SSD';
+    else if (lower.endsWith('.onnx')) family = 'ONNX Model';
+    else family = modelName;
+  } else if (status === 'pt') {
+    family = 'PyTorch Model';
+  }
+
+  return (
+    <div style={{ position: 'absolute', top: 6, left: 8, zIndex: 3, display: 'flex', flexDirection: 'column', gap: 6 }}>
+      <div style={{ background: color, color: '#fff', padding: '4px 8px', borderRadius: 6, fontSize: 12 }}>
+        Model: {String(status).toUpperCase()}{modelName ? ` • ${modelName}` : ''}{family ? ` (${family})` : ''}
+      </div>
+      <div style={{ background: '#222', color: '#fff', padding: '4px 8px', borderRadius: 6, fontSize: 12 }}>
+        Processing: {processingText}
+      </div>
+    </div>
+  );
+}

@@ -3,11 +3,14 @@
   "version": "1.0.0",
   "main": "main.py",
   "scripts": {
-    "start": "node signaling.js"
+  "start": "node signaling.js",
+  "inference": "node inference_server.js"
   },
   "dependencies": {
     "cors": "^2.8.5",
     "express": "^4.18.2",
-    "ws": "^8.13.0"
+  "ws": "^8.13.0",
+  "@tensorflow/tfjs-node": "^4.22.0",
+  "@tensorflow-models/coco-ssd": "^2.2.3"
   }
 }

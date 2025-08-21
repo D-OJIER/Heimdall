@@ -354,6 +354,25 @@ class WebRTCHandler {
     return false;
   }
 
+  // Send a full frame (base64 image) to the signaling server for external inference
+  sendFrame(frameObj) {
+    try {
+      const msg = typeof frameObj === 'string' ? JSON.parse(frameObj) : frameObj;
+      if (!msg || !msg.frame_id || !msg.image_b64) {
+        console.warn('sendFrame: invalid frame object; required: frame_id, image_b64');
+      }
+      if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+        this.sendToServer({ type: 'frame', payload: msg });
+        return true;
+      } else {
+        console.warn('sendFrame: WebSocket not open; cannot send frame.');
+      }
+    } catch (e) {
+      console.error('Error in sendFrame:', e);
+    }
+    return false;
+  }
+
   resetPeer() {
     if (this.peer) {
       this.peer.destroy();
