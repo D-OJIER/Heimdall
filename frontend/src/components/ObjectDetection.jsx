@@ -19,7 +19,8 @@ const ObjectDetection = ({ videoStream, sendDetectionToPeer, remoteDetections, o
   // server-mode capture controls
   const [localStream, setLocalStream] = useState(null);
   const [captureRunning, setCaptureRunning] = useState(false);
-  const [fps, setFps] = useState(5);
+  // target capture FPS for server-mode (choose default within 10-15)
+  const [fps, setFps] = useState(12);
   const [wsUrlOverride, setWsUrlOverride] = useState(null);
   const [preferRearCamera, setPreferRearCamera] = useState(true);
 
@@ -172,10 +173,10 @@ const ObjectDetection = ({ videoStream, sendDetectionToPeer, remoteDetections, o
         const video = videoRef.current;
         if (!video || video.readyState < 2) return;
 
-        // draw to an offscreen canvas at smaller size to reduce bandwidth and latency
-        const off = document.createElement('canvas');
-        const w = 320; const h = Math.round((video.videoHeight / video.videoWidth) * w) || 240;
-        off.width = w; off.height = h;
+  // draw to an offscreen canvas at target size 320x240 to reduce bandwidth and latency
+  const off = document.createElement('canvas');
+  const w = 320; const h = 240;
+  off.width = w; off.height = h;
         const ctx = off.getContext('2d');
         ctx.drawImage(video, 0, 0, w, h);
         const b64 = off.toDataURL('image/jpeg', 0.6);
@@ -199,7 +200,7 @@ const ObjectDetection = ({ videoStream, sendDetectionToPeer, remoteDetections, o
 
     // start/stop controlled by captureRunning
     if (captureRunning) {
-      // set interval based on fps
+      // set interval based on fps (target 10-15; default 12)
       const interval = Math.max(1, Math.round(1000 / (fps || 1)));
       intervalId = setInterval(sendSingleFrame, interval);
       // send one immediately

@@ -2,9 +2,26 @@ const express = require('express');
 const http = require('http');
 const WebSocket = require('ws');
 const cors = require('cors');
+const os = require('os');
 
 const app = express();
 app.use(cors());
+
+// Provide a simple helper that returns the machine's LAN IPv4 address
+// so the frontend can build a QR code linking to the dev server.
+app.get('/api/ip', (req, res) => {
+    const nets = os.networkInterfaces();
+    let ip = 'localhost';
+    for (const name of Object.keys(nets)) {
+        for (const net of nets[name]) {
+            if (net.family === 'IPv4' && !net.internal) {
+                ip = net.address;
+                return res.json({ ip });
+            }
+        }
+    }
+    res.json({ ip });
+});
 
 const server = http.createServer(app);
 const wss = new WebSocket.Server({ 

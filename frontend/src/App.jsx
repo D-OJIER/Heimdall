@@ -31,7 +31,19 @@ export default function App() {
       console.log('Forcing local camera preview due to ?forceLocal=1');
     }
   setIsMobile(isMobileDevice || forceLocal);
-    setQrUrl(window.location.href);
+    // Try to fetch the machine LAN IP from the local helper service (server/ip_service.js)
+    // This is useful in development so the QR code points to the dev server reachable from your phone.
+    fetch('/api/ip')
+      .then(res => res.json())
+      .then(({ ip }) => {
+        const port = window.location.port || (window.location.protocol === 'https:' ? '443' : '80');
+        setQrUrl(`http://${ip}:${port}/`);
+      })
+      .catch(err => {
+        // If the helper isn't running, fall back to the current page URL
+        console.warn('Failed to fetch LAN IP; falling back to current URL', err);
+        setQrUrl(window.location.href);
+      });
 
     const webrtc = new WebRTCHandler(
       null,

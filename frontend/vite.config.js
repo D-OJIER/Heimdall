@@ -35,5 +35,14 @@ export default defineConfig({
     port: 3000,
     strictPort: true,
     open: false,
+    // Proxy local API calls to the signaling server which now exposes /api/ip
+    proxy: {
+      '/api': {
+        // Use explicit IPv4 loopback to avoid IPv6 (::1) connection refused on some Windows setups
+        target: 'http://127.0.0.1:8080',
+        changeOrigin: true,
+        secure: false,
+      }
+    }
   },
 });
