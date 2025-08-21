@@ -83,6 +83,7 @@ async def ensure_model_loaded():
         if model_main.onnx_session is not None:
             model_main.loaded_model_type = 'onnx'
             model_main.loaded_model_path = model_path
+            print(f"[live_receiver] loaded ONNX model: {model_path}")
             return
     # try PT fallback
     pt = model_main.find_pt_model()
@@ -94,6 +95,7 @@ async def ensure_model_loaded():
             model_main.torch_model.eval()
             model_main.loaded_model_type = 'pt'
             model_main.loaded_model_path = pt
+            print(f"[live_receiver] loaded PT model: {pt}")
         except Exception:
             model_main.torch_model = None
 
@@ -117,6 +119,22 @@ async def run_inference_on_bytes(raw: bytes) -> list:
                 break
         if preds is None:
             preds = outputs[0][0]
+        try:
+            print(f"[live_receiver] ONNX outputs count: {len(outputs)}; preds shape: {None if preds is None else getattr(preds,'shape',None)}")
+            # debug some preds statistics to help diagnose filtering
+            try:
+                obj_scores = preds[:, 4]
+                print(f"[live_receiver] ONNX objectness scores: min={float(obj_scores.min()):.6f}, max={float(obj_scores.max()):.6f}, mean={float(obj_scores.mean()):.6f}")
+                # show top 8 objectness scores
+                top_idx = obj_scores.argsort()[-8:][::-1]
+                print('[live_receiver] ONNX top objectness samples:', [float(obj_scores[i]) for i in top_idx])
+                # show first prediction row (x,y,w,h,obj, then first 6 class probs)
+                sample = preds[0]
+                print('[live_receiver] ONNX preds[0,:10]:', [float(x) for x in sample[:10]])
+            except Exception:
+                pass
+        except Exception:
+            pass
         dets = model_main.non_max_suppression(preds, conf_thres=model_main.conf_threshold, iou_thres=model_main.iou_threshold)
     # PT
     elif model_main.torch_model is not None:
@@ -136,6 +154,10 @@ async def run_inference_on_bytes(raw: bytes) -> list:
                 preds = preds
             else:
                 preds = preds.reshape(-1, preds.shape[-1])
+            try:
+                print(f"[live_receiver] PT preds shape: {preds.shape}")
+            except Exception:
+                pass
             dets = model_main.non_max_suppression(preds, conf_thres=model_main.conf_threshold, iou_thres=model_main.iou_threshold)
         except Exception as e:
             raise RuntimeError(f'pt inference failed: {e}')
@@ -145,6 +167,7 @@ async def run_inference_on_bytes(raw: bytes) -> list:
 
     # Map boxes back to original image space and normalize
     detections = []
+    print(f"[live_receiver] raw dets count: {len(dets)}")
     for d in dets:
         x1, y1, x2, y2, score, cls = d
         x1 = max(0, (x1 - dw) / r)
@@ -178,6 +201,13 @@ async def websocket_live(ws: WebSocket):
             if not b64:
                 await ws.send_text(json.dumps({'error': 'image_b64 missing', 'frame_id': frame_id}))
                 continue
+
+            # log brief info so operator can see frame arrival in uvicorn logs
+            try:
+                print(f"[live_receiver] got frame_id={frame_id} image_b64_len={len(b64)}")
+            except Exception:
+                # best-effort logging; don't crash on print issues
+                pass
 
             try:
                 raw = decode_b64_image(b64)

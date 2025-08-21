@@ -12,6 +12,16 @@ const ObjectDetection = ({ videoStream, sendDetectionToPeer, remoteDetections, o
   const [model, setModel] = useState(null);
   const [isDetecting, setIsDetecting] = useState(false);
   const [backend, setBackend] = useState('');
+  const liveWsRef = useRef(null);
+  const [liveConnected, setLiveConnected] = useState(false);
+  const [annotatedB64, setAnnotatedB64] = useState(null);
+  const [serverDetections, setServerDetections] = useState([]);
+  // server-mode capture controls
+  const [localStream, setLocalStream] = useState(null);
+  const [captureRunning, setCaptureRunning] = useState(false);
+  const [fps, setFps] = useState(5);
+  const [wsUrlOverride, setWsUrlOverride] = useState(null);
+  const [preferRearCamera, setPreferRearCamera] = useState(true);
 
   // Load the COCO-SSD model
   useEffect(() => {
@@ -144,27 +154,23 @@ const ObjectDetection = ({ videoStream, sendDetectionToPeer, remoteDetections, o
     };
   }, [videoStream]);
 
-  // When local detection is disabled (server mode), periodically capture frames and POST to server for inference
+  // When local detection is disabled (server mode), optionally capture frames and send to live_receiver via WS
   useEffect(() => {
     if (enableLocalDetection) return;
     if (!videoRef.current) return;
 
-  let stopped = false;
-  const captureInterval = 250; // ms (reduced from 700 -> faster updates)
-  let inflight = false; // prevent overlapping requests
+    let stopped = false;
+    let inflight = false; // prevent overlapping requests
+    let intervalId = null;
 
-  // build infer host from Vite env or fallback to page hostname
-  const envInferHost = (typeof import.meta !== 'undefined' && import.meta.env && import.meta.env.VITE_INFER_HOST) || null;
-  const inferHost = envInferHost || `${window.location.protocol}//${window.location.hostname}:8000`;
+  // build live WS host (for live_receiver websocket) or override with VITE_LIVE_WS
+  const envLiveWs = (typeof import.meta !== 'undefined' && import.meta.env && import.meta.env.VITE_LIVE_WS) || null;
+  const defaultLiveWs = envLiveWs || `${window.location.protocol === 'https:' ? 'wss' : 'ws'}://${window.location.hostname}:8001/ws/live`;
 
-  const sendFrame = async () => {
-      if (stopped) return;
+    const sendSingleFrame = async () => {
       try {
         const video = videoRef.current;
-        if (!video || video.readyState < 2) {
-          setTimeout(sendFrame, captureInterval);
-          return;
-        }
+        if (!video || video.readyState < 2) return;
 
         // draw to an offscreen canvas at smaller size to reduce bandwidth and latency
         const off = document.createElement('canvas');
@@ -175,32 +181,99 @@ const ObjectDetection = ({ videoStream, sendDetectionToPeer, remoteDetections, o
         const b64 = off.toDataURL('image/jpeg', 0.6);
         const frameId = `frame-${Date.now()}-${Math.round(Math.random()*1000)}`;
 
-  // send to server infer endpoint
-  const url = `${inferHost.replace(/\/$/, '')}/infer_frame`;
-        // avoid sending if still waiting for previous inference result
-        if (inflight) {
-          // schedule next attempt
-          setTimeout(sendFrame, captureInterval);
-          return;
+        // send to live websocket only (WS-only mode). If WS not open, skip frame.
+        const ws = liveWsRef.current;
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          try {
+            ws.send(JSON.stringify({ frame_id: frameId, image_b64: b64 }));
+          } catch (e) {
+            console.warn('Failed to send frame over live WS:', e);
+          }
+        } else {
+          // WS not available: skip this frame silently (avoid HTTP fallback / connection errors)
         }
-        inflight = true;
-        fetch(url, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ frame_id: frameId, image_b64: b64 })
-        }).catch(err => console.warn('Failed to send frame to server infer endpoint:', err))
-        .finally(() => { inflight = false; });
       } catch (e) {
         console.error('Error capturing frame for server inference:', e);
-      } finally {
-        setTimeout(sendFrame, captureInterval);
       }
     };
 
-    sendFrame();
+    // start/stop controlled by captureRunning
+    if (captureRunning) {
+      // set interval based on fps
+      const interval = Math.max(1, Math.round(1000 / (fps || 1)));
+      intervalId = setInterval(sendSingleFrame, interval);
+      // send one immediately
+      sendSingleFrame();
+    }
 
-    return () => { stopped = true; };
-  }, [enableLocalDetection, videoRef.current]);
+    return () => {
+      stopped = true;
+      if (intervalId) clearInterval(intervalId);
+    };
+  }, [enableLocalDetection, videoRef.current, captureRunning, fps]);
+
+  // Auto-start capture in server mode so component talks to live_receiver directly
+  useEffect(() => {
+    if (enableLocalDetection) return;
+    (async () => {
+      try {
+        if (!captureRunning) {
+          if (!videoStream) {
+            const s = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+            setLocalStream(s);
+            if (videoRef.current) videoRef.current.srcObject = s;
+          }
+          setCaptureRunning(true);
+        }
+      } catch (e) {
+        console.warn('Auto-start capture failed:', e);
+      }
+    })();
+    // run once when entering server mode
+  }, [enableLocalDetection]);
+
+  // Manage live WS connection for server-mode annotated frames
+  useEffect(() => {
+    if (enableLocalDetection) return;
+    const envLiveWs = (typeof import.meta !== 'undefined' && import.meta.env && import.meta.env.VITE_LIVE_WS) || null;
+    const defaultLiveWsUrl = envLiveWs || `${window.location.protocol === 'https:' ? 'wss' : 'ws'}://${window.location.hostname}:8001/ws/live`;
+    const liveWsUrl = wsUrlOverride || defaultLiveWsUrl;
+    let ws = null;
+    try {
+      ws = new WebSocket(liveWsUrl);
+      liveWsRef.current = ws;
+    } catch (e) {
+      console.warn('Failed to create live WS to', liveWsUrl, e);
+      return;
+    }
+    ws.onopen = () => {
+      console.log('Connected to live receiver WS at', liveWsUrl);
+      setLiveConnected(true);
+    };
+    ws.onmessage = (ev) => {
+      try {
+        const j = JSON.parse(ev.data);
+        if (j.annotated_b64) setAnnotatedB64(j.annotated_b64);
+        if (j.detections) setServerDetections(j.detections);
+      } catch (e) {
+        console.warn('Invalid message from live WS', e);
+      }
+    };
+    ws.onerror = (e) => {
+      console.warn('Live WS error', e);
+      setLiveConnected(false);
+    };
+    ws.onclose = () => {
+      console.log('Live WS closed');
+      setLiveConnected(false);
+      liveWsRef.current = null;
+    };
+    return () => {
+      try { if (ws) ws.close(); } catch (e) {}
+      liveWsRef.current = null;
+      setLiveConnected(false);
+    };
+  }, [enableLocalDetection, wsUrlOverride]);
 
   // Add event listeners for video element
   useEffect(() => {
@@ -228,6 +301,75 @@ const ObjectDetection = ({ videoStream, sendDetectionToPeer, remoteDetections, o
       });
     };
   }, []);
+
+  // Draw server detections (server-mode) onto the overlay canvas
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    const video = videoRef.current;
+    if (!canvas || !video) return;
+
+    const ctx = canvas.getContext('2d');
+    const draw = () => {
+      try {
+        // make canvas match video pixel size
+        const vw = video.videoWidth || canvas.clientWidth || 320;
+        const vh = video.videoHeight || canvas.clientHeight || 240;
+        if (canvas.width !== vw || canvas.height !== vh) {
+          canvas.width = vw;
+          canvas.height = vh;
+        }
+
+        // clear previous drawings
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+        if (Array.isArray(serverDetections) && serverDetections.length > 0) {
+          ctx.lineWidth = 2;
+          ctx.strokeStyle = '#ff3300';
+          ctx.fillStyle = '#ff3300';
+          ctx.font = '14px Arial';
+
+          serverDetections.forEach(d => {
+            try {
+              const x = Math.round(d.xmin * canvas.width);
+              const y = Math.round(d.ymin * canvas.height);
+              const w = Math.round((d.xmax - d.xmin) * canvas.width);
+              const h = Math.round((d.ymax - d.ymin) * canvas.height);
+              // draw box
+              ctx.strokeRect(x, y, w, h);
+
+              // draw label background and text
+              const label = `${d.label} ${Math.round((d.score||0)*100)}%`;
+              const padding = 4;
+              const textWidth = ctx.measureText(label).width;
+              const textHeight = 14;
+              const bx = x;
+              const by = Math.max(0, y - textHeight - padding);
+              ctx.fillRect(bx, by, textWidth + padding * 2, textHeight + padding);
+              ctx.fillStyle = '#ffffff';
+              ctx.fillText(label, bx + padding, by + textHeight - 2);
+              // restore fillStyle for boxes
+              ctx.fillStyle = '#ff3300';
+            } catch (e) {
+              // ignore per-detection errors
+            }
+          });
+        }
+      } catch (e) {
+        // drawing should not throw to avoid breaking the app
+        console.warn('draw serverDetections failed', e);
+      }
+    };
+
+    // draw immediately and whenever dependencies change
+    draw();
+
+    // redraw on video resize events
+    video.addEventListener('resize', draw);
+    // cleanup
+    return () => {
+      try { video.removeEventListener('resize', draw); } catch (e) {}
+    };
+  }, [serverDetections, annotatedB64, liveConnected]);
 
   // Detect objects in the video stream
   useEffect(() => {
@@ -355,7 +497,7 @@ const ObjectDetection = ({ videoStream, sendDetectionToPeer, remoteDetections, o
   }, [model, videoStream]);
 
   return (
-    <div style={{ position: 'relative', width: '320px', height: '240px', margin: '0 auto' }}>
+  <div style={{ position: 'relative', width: '320px', height: '240px', margin: '0 auto' }}>
       <video
         ref={videoRef}
         autoPlay
@@ -376,9 +518,14 @@ const ObjectDetection = ({ videoStream, sendDetectionToPeer, remoteDetections, o
           left: 0,
           width: '100%',
           height: '100%',
-          zIndex: 1
+          zIndex: 3
         }}
       />
+      {/* If server produced an annotated image, display it above the video */}
+      {!enableLocalDetection && annotatedB64 && (
+  <img src={annotatedB64} alt="annotated" style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', zIndex: 1, objectFit: 'cover' }} />
+      )}
+    {/* server-mode UI controls removed per request; capture auto-starts and sends frames to live_receiver */}
   {/* Backend display (only for local/capture mode) */}
   {enableLocalDetection && typeof sendDetectionToPeer === 'function' && backend && (
         <div style={{
@@ -399,7 +546,14 @@ const ObjectDetection = ({ videoStream, sendDetectionToPeer, remoteDetections, o
 
   {/* Model status badge for server-mode */}
   {!enableLocalDetection && (
-    <ModelStatusBadge inferHost={(typeof import.meta !== 'undefined' && import.meta.env && import.meta.env.VITE_INFER_HOST) || null} />
+    <>
+      
+      <div style={{ position: 'absolute', top: 6, right: 8, zIndex: 3 }}>
+        <div style={{ background: liveConnected ? '#28a745' : '#666', color: '#fff', padding: '4px 8px', borderRadius: 6, fontSize: 12 }}>
+          Live WS: {liveConnected ? 'CONNECTED' : 'DISCONNECTED'}
+        </div>
+      </div>
+    </>
   )}
     </div>
   );
@@ -459,9 +613,7 @@ function ModelStatusBadge({ inferHost = null }) {
       <div style={{ background: color, color: '#fff', padding: '4px 8px', borderRadius: 6, fontSize: 12 }}>
         Model: {String(status).toUpperCase()}{modelName ? ` • ${modelName}` : ''}{family ? ` (${family})` : ''}
       </div>
-      <div style={{ background: '#222', color: '#fff', padding: '4px 8px', borderRadius: 6, fontSize: 12 }}>
-        Processing: {processingText}
-      </div>
+  {/* Processing display removed per request */}
     </div>
   );
 }

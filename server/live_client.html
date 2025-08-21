@@ -18,10 +18,14 @@
     <label>FPS: <input id="fps" type="number" value="5" min="1" max="30" style="width:60px"/></label>
     <label>WS URL: <input id="wsUrl" type="text" value="ws://localhost:8001/ws/live" style="width:320px"/></label>
   </div>
-  <video id="video" autoplay muted playsinline width="640" height="480"></video>
+  <div id="viewer" style="position:relative; display:inline-block">
+    <video id="video" autoplay muted playsinline width="640" height="480" style="display:block"></video>
+    <!-- overlay canvas drawn client-side using normalized detections from server -->
+    <canvas id="overlay" width="640" height="480" style="position:absolute; left:0; top:0; pointer-events:none"></canvas>
+  </div>
   <canvas id="canvas" width="640" height="480" style="display:none"></canvas>
-  <h3>Annotated (server) -></h3>
-  <img id="annotated" alt="annotated frame" />
+  <h3>Annotated (server JPEG, optional) -></h3>
+  <img id="annotated" alt="annotated frame" style="max-width:320px" />
   <h3>Detections</h3>
   <div id="detections">(none)</div>
 
@@ -30,10 +34,12 @@
     const stopBtn = document.getElementById('stopBtn')
     const video = document.getElementById('video')
     const canvas = document.getElementById('canvas')
-    const annotated = document.getElementById('annotated')
+  const annotated = document.getElementById('annotated')
     const detectionsDiv = document.getElementById('detections')
     const fpsInput = document.getElementById('fps')
     const wsUrlInput = document.getElementById('wsUrl')
+  const overlay = document.getElementById('overlay')
+  const overlayCtx = overlay.getContext('2d')
 
     let ws = null
     let stream = null
@@ -62,8 +68,12 @@
       ws.onmessage = (ev) => {
         try {
           const data = JSON.parse(ev.data)
+          // server-provided annotated JPEG shown as small preview (optional)
           if (data.annotated_b64) annotated.src = data.annotated_b64
+
+          // draw client-side overlay for lowest-latency boxes on top of the video
           if (data.detections) {
+            renderOverlay(data.detections)
             if (data.detections.length === 0) detectionsDiv.textContent = '(no detections)'
             else {
               const lines = data.detections.map(d => `${d.label} ${d.score.toFixed(2)} [${(d.xmin*100).toFixed(1)}%, ${(d.ymin*100).toFixed(1)}% -> ${(d.xmax*100).toFixed(1)}%, ${(d.ymax*100).toFixed(1)}%]`)
@@ -95,6 +105,33 @@
       const dataUrl = canvas.toDataURL('image/jpeg', 0.8)
       const payload = { frame_id: `frame-${Date.now()}`, image_b64: dataUrl }
       ws.send(JSON.stringify(payload))
+    }
+
+    function renderOverlay(detections) {
+      // overlay canvas is same size as video; detections are normalized
+      const w = overlay.width
+      const h = overlay.height
+      overlayCtx.clearRect(0, 0, w, h)
+      overlayCtx.lineWidth = 3
+      overlayCtx.font = '16px Arial'
+      overlayCtx.textBaseline = 'top'
+      detections.forEach(d => {
+        const x1 = Math.round(d.xmin * w)
+        const y1 = Math.round(d.ymin * h)
+        const x2 = Math.round(d.xmax * w)
+        const y2 = Math.round(d.ymax * h)
+        const bw = Math.max(2, Math.round(2 * (w / 640)))
+        overlayCtx.lineWidth = bw
+        overlayCtx.strokeStyle = 'rgba(255,0,0,0.9)'
+        overlayCtx.fillStyle = 'rgba(255,0,0,0.9)'
+        overlayCtx.strokeRect(x1, y1, x2 - x1, y2 - y1)
+        const label = `${d.label} ${d.score.toFixed(2)}`
+        const textW = overlayCtx.measureText(label).width
+        const pad = 4
+        overlayCtx.fillRect(x1, Math.max(0, y1 - 20), textW + pad * 2, 20)
+        overlayCtx.fillStyle = 'white'
+        overlayCtx.fillText(label, x1 + pad, Math.max(0, y1 - 18))
+      })
     }
 
     startBtn.addEventListener('click', start)
