@@ -56,5 +56,6 @@ else
   # Return to frontend and start dev server
   cd "$ROOT_DIR/frontend"
   echo "Starting frontend (default backend)..."
-  npm run dev
+  # Ensure frontend runs in server mode so it connects to the server-side inference/signaling
+  VITE_MODE=server npm run dev
 fi

@@ -148,104 +148,58 @@ export default function App() {
     }
   };
 
+  const statusText = serverMode ? 'Running on: SERVER'
+    : (remoteDetections && remoteDetections.length > 0) ? 'Running on: SERVER'
+    : isMobile ? (backend ? `Running on: ${backend.toUpperCase()}` : 'Detecting backend...')
+    : 'Waiting for detections...';
+  const statusClass = (serverMode || (remoteDetections && remoteDetections.length > 0) || connected) ? 'ok' : 'warn';
+
   return (
-    <div style={{ textAlign: "center" }}>
-      <h2>Heimdall: Phone Camera Stream (WebRTC)</h2>
-      {/* Backend/Mode display - prefer showing SERVER when remote detections are present */}
-      <div style={{ marginBottom: 8, fontWeight: 500 }}>
-        {serverMode ? (
-          'Running on: SERVER'
-        ) : remoteDetections && remoteDetections.length > 0 ? (
-          'Running on: SERVER'
-        ) : isMobile ? (
-          backend ? `Running on: ${backend.toUpperCase()}` : 'Detecting backend...'
-        ) : (
-          'Waiting for detections...'
-        )}
+    <div className="app-container">
+      <div className="app-header">
+        <h1 className="app-title">Heimdall</h1>
+        <p className="app-subtitle">Phone camera stream and object detection</p>
       </div>
+
+      <div className="status-bar">
+        <div className={`status-pill ${statusClass}`}>{statusText}</div>
+      </div>
+
       {isMobile ? (
-        <ObjectDetection
-          videoStream={localStream}
-          sendDetectionToPeer={(d) => webrtcRef.current && webrtcRef.current.sendDetection(d)}
-          onBackendChange={setBackend}
-          enableLocalDetection={!serverMode}
-        />
-      ) : (
-        <>
-          <div>
-            <p>Scan this QR code with your phone to join:</p>
-            <QRCode value={qrUrl} size={180} />
-            <p>Or open: <b>{qrUrl}</b> on your phone</p>
-          </div>
+        <div className="card stream-card">
           <ObjectDetection
-            videoStream={remoteStream}
-            remoteDetections={remoteDetections}
+            videoStream={localStream}
             sendDetectionToPeer={(d) => webrtcRef.current && webrtcRef.current.sendDetection(d)}
+            onBackendChange={setBackend}
             enableLocalDetection={!serverMode}
           />
-          {connected ? <div style={{ color: "green" }}>2705 Connected!</div> : <div>Waiting for connection...</div>}
-        </>
-      )}
-      {error && <div style={{ color: "red" }}>{error}</div>}
-      {connected && (
-        <div style={{ marginTop: "20px", maxWidth: "600px", margin: "20px auto" }}>
-          <div style={{
-            border: "1px solid #ccc",
-            borderRadius: "5px",
-            padding: "10px",
-            height: "200px",
-            overflowY: "auto",
-            marginBottom: "10px",
-            backgroundColor: "#f5f5f5"
-          }}>
-            {messages.map((msg, index) => (
-              <div
-                key={index}
-                style={{
-                  textAlign: msg.received ? "left" : "right",
-                  margin: "5px",
-                  padding: "8px",
-                  backgroundColor: msg.received ? "#e3f2fd" : "#e8f5e9",
-                  borderRadius: "10px",
-                  display: "inline-block",
-                  maxWidth: "70%",
-                  wordWrap: "break-word"
-                }}
-              >
-                {msg.text}
-              </div>
-            ))}
+        </div>
+      ) : (
+        <div className="layout-grid">
+          <div className="card">
+            <h3>Connect your phone</h3>
+            <div className="qr-wrapper">
+              <div className="qr-code"><QRCode value={qrUrl} size={180} /></div>
+              <div className="muted">Scan this QR code with your phone</div>
+              <div className="copy-url">{qrUrl}</div>
+            </div>
           </div>
-          <div style={{ display: "flex", gap: "10px" }}>
-            <input
-              type="text"
-              value={inputMessage}
-              onChange={(e) => setInputMessage(e.target.value)}
-              onKeyPress={(e) => e.key === "Enter" && sendMessage()}
-              placeholder="Type a message..."
-              style={{
-                flex: 1,
-                padding: "8px",
-                borderRadius: "5px",
-                border: "1px solid #ccc"
-              }}
+          <div className="card stream-card">
+            <h3>Live stream</h3>
+            <ObjectDetection
+              videoStream={remoteStream}
+              remoteDetections={remoteDetections}
+              sendDetectionToPeer={(d) => webrtcRef.current && webrtcRef.current.sendDetection(d)}
+              enableLocalDetection={!serverMode}
             />
-            <button
-              onClick={sendMessage}
-              style={{
-                padding: "8px 16px",
-                borderRadius: "5px",
-                border: "none",
-                backgroundColor: "#4CAF50",
-                color: "white",
-                cursor: "pointer"
-              }}
-            >
-              Send
-            </button>
+            <div className="connection-state">{connected ? 'Connected' : 'Waiting for connection...'}</div>
           </div>
         </div>
       )}
+
+      {error && <div className="connection-state" style={{ color: '#f2555a' }}>{error}</div>}
+
+      
     </div>
   );
 }

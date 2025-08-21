@@ -21,44 +21,51 @@ param(
   [string]$Device = 'cpu'
 )
 
-set -e
+# Strict error handling
+$ErrorActionPreference = "Stop"
 
 $scriptRoot = Split-Path -Parent $MyInvocation.MyCommand.Definition
-$repoRoot = Resolve-Path (Join-Path $scriptRoot '..')
-$serverDir = Resolve-Path (Join-Path $repoRoot 'server')
-$yoloDir = Resolve-Path (Join-Path $serverDir 'yolov5')
-$modelsDir = Resolve-Path (Join-Path $serverDir 'models') -ErrorAction SilentlyContinue
-if (-not $modelsDir) {
-  New-Item -ItemType Directory -Path (Join-Path $serverDir 'models') | Out-Null
-  $modelsDir = Resolve-Path (Join-Path $serverDir 'models')
+$repoRoot   = Resolve-Path (Join-Path $scriptRoot '..')
+$serverDir  = Resolve-Path (Join-Path $repoRoot 'server')
+$yoloDir    = Resolve-Path (Join-Path $serverDir 'yolov5')
+
+# Ensure models dir exists
+$modelsDir = Join-Path $serverDir 'models'
+if (-not (Test-Path $modelsDir)) {
+  New-Item -ItemType Directory -Path $modelsDir | Out-Null
 }
 
 # Determine Python executable: prefer server venv
 $venvPython = Join-Path $serverDir '.venv\Scripts\python.exe'
 if (Test-Path $venvPython) {
   $python = $venvPython
-  Write-Host "Using venv Python:$python"
+  Write-Host "Using venv Python: $python"
 } else {
   $python = 'python'
   Write-Host "Using system Python (ensure required packages are installed): $python"
 }
 
-# Resolve weights path: if file exists in provided path use it; otherwise look inside yolov5 dir
+# Resolve weights path
 if (Test-Path $Weights) {
   $weightsPath = Resolve-Path $Weights
 } else {
   $candidate = Join-Path $yoloDir $Weights
-  if (Test-Path $candidate) { $weightsPath = Resolve-Path $candidate } else { $weightsPath = $Weights }
+  if (Test-Path $candidate) { 
+    $weightsPath = Resolve-Path $candidate 
+  } else { 
+    $weightsPath = $Weights 
+  }
 }
 
-Write-Host "Exporting weights:" $weightsPath
-Write-Host "YOLO dir:" $yoloDir
+Write-Host "Exporting weights: $weightsPath"
+Write-Host "YOLO dir: $yoloDir"
 
 if (-not (Test-Path (Join-Path $yoloDir 'export.py'))) {
   Write-Error "export.py not found in $yoloDir. Make sure yolov5 is present under server/yolov5"
   exit 1
 }
 
+# Run export
 Push-Location $yoloDir
 try {
   $args = @('--weights', "$weightsPath", '--include', 'onnx', '--img', "$Img", '--device', "$Device")
@@ -71,16 +78,20 @@ try {
 }
 Pop-Location
 
-# Find the generated .onnx file (common name is same base as weights)
+# Find the generated .onnx file
 $onnxName = [System.IO.Path]::GetFileNameWithoutExtension($Weights) + '.onnx'
-$possible = @(Join-Path $yoloDir $onnxName, Join-Path $repoRoot $onnxName, Join-Path $yoloDir 'weights' $onnxName)
+$possible = @(
+  (Join-Path $yoloDir $onnxName),
+  (Join-Path $repoRoot $onnxName),
+  (Join-Path $yoloDir 'weights' $onnxName)
+)
+
 $found = $null
 foreach ($p in $possible) {
   if (Test-Path $p) { $found = Resolve-Path $p; break }
 }
 
 if (-not $found) {
-  # search for any .onnx produced recently in yolov5 dir
   $candidates = Get-ChildItem -Path $yoloDir -Filter '*.onnx' -Recurse | Sort-Object LastWriteTime -Descending
   if ($candidates -and $candidates.Count -gt 0) { $found = $candidates[0].FullName }
 }
@@ -90,6 +101,7 @@ if (-not $found) {
   exit 3
 }
 
+# Copy to server/models
 $dest = Join-Path $modelsDir ([System.IO.Path]::GetFileName($found))
 Copy-Item -Path $found -Destination $dest -Force
 Write-Host "Copied ONNX to: $dest"

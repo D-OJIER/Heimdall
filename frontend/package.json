@@ -9,7 +9,9 @@
     "build": "vite build",
     "lint": "eslint .",
     "preview": "vite preview",
-    "start": "react-scripts start --host 0.0.0.0"
+    "start": "react-scripts start --host 0.0.0.0",
+    "start:server-mode": "powershell -ExecutionPolicy Bypass -File ../scripts/start-server-mode.ps1",
+    "start:wasm-mode": "powershell -ExecutionPolicy Bypass -File ../scripts/start-wasm-mode.ps1"
   },
   "dependencies": {
     "@tensorflow-models/coco-ssd": "^2.2.3",

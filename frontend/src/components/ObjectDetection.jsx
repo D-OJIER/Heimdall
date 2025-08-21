@@ -498,33 +498,22 @@ const ObjectDetection = ({ videoStream, sendDetectionToPeer, remoteDetections, o
   }, [model, videoStream]);
 
   return (
-  <div style={{ position: 'relative', width: '320px', height: '240px', margin: '0 auto' }}>
+  <div className="stream-wrapper">
       <video
         ref={videoRef}
         autoPlay
         playsInline
         muted
-        style={{
-          position: 'absolute',
-          width: '100%',
-          height: '100%',
-          objectFit: 'cover'
-        }}
+        className="video-element"
       />
       <canvas
         ref={canvasRef}
-        style={{
-          position: 'absolute',
-          top: 0,
-          left: 0,
-          width: '100%',
-          height: '100%',
-          zIndex: 3
-        }}
+        className="canvas-overlay"
+        style={{ zIndex: 3 }}
       />
       {/* If server produced an annotated image, display it above the video */}
       {!enableLocalDetection && annotatedB64 && (
-  <img src={annotatedB64} alt="annotated" style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', zIndex: 1, objectFit: 'cover' }} />
+  <img src={annotatedB64} alt="annotated" className="annotated-image" style={{ zIndex: 1 }} />
       )}
     {/* server-mode UI controls removed per request; capture auto-starts and sends frames to live_receiver */}
   {/* Backend display (only for local/capture mode) */}
